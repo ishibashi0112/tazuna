@@ -1,12 +1,12 @@
 /**
- * 入力(.sln / .vbproj / ディレクトリ / 省略)から対象ファイルを決める。
+ * 入力(.sln / .vbproj / .csproj / ディレクトリ / 省略)から対象ファイルを決める。
  *
- * - ファイル指定: 拡張子が .sln / .vbproj ならそのまま採用
+ * - ファイル指定: 拡張子が .sln / .vbproj / .csproj ならそのまま採用
  * - ディレクトリ指定・省略(カレント): 直下の *.sln を探し、1 件ならそれを
- *   採用。0 件なら *.vbproj で同じことを行う(.sln 優先)
+ *   採用。0 件なら *.vbproj と *.csproj を合わせて同じことを行う(.sln 優先)
  * - 複数見つかった場合は候補を並べてエラー(勝手に選ばない)
  * - ディレクトリ指定・省略で、その場所の slnmix.config.json が kind: "generic" なら
- *   .sln / .vbproj を探さず「generic 構成」を返す(VB.NET 以外のプロジェクト。
+ *   .sln / .vbproj / .csproj を探さず「generic 構成」を返す(.sln の無いプロジェクト。
  *   v0.17.0〜)。ファイルを明示したときは従来どおりそのファイルを採用する
  *
  * ファイルシステムは deps 注入とし、単体テスト可能に保つ(CLI 固有機能の
@@ -15,6 +15,7 @@
 
 import * as path from "node:path";
 import { INIT_COMMAND } from "../brand.ts";
+import { PROJECT_FILE, TARGET_FILE, projectFilesLabel, projectLanguageOf, type ProjectLanguage } from "./projectLanguage.ts";
 import { CONFIG_FILE_NAME, configFileNameIn } from "./slnmixConfig.ts";
 
 export interface TargetResolverDeps {
@@ -36,11 +37,11 @@ export interface TargetResolverDeps {
 
 export type TargetResolution =
   | { kind: "file"; path: string; autoDetected: boolean; source?: "config" }
-  /** .sln / .vbproj を使わない構成(slnmix.config.json の kind: "generic")。rootDir は設定の場所 */
+  /** .sln / .vbproj / .csproj を使わない構成(slnmix.config.json の kind: "generic")。rootDir は設定の場所 */
   | { kind: "generic"; rootDir: string }
   | { kind: "error"; message: string };
 
-const TARGET_EXTENSION = /\.(sln|vbproj)$/i;
+const TARGET_EXTENSION = TARGET_FILE;
 
 /**
  * @param input CLI の位置引数(省略時 undefined)
@@ -64,7 +65,7 @@ export function resolveTarget(
     }
     return {
       kind: "error",
-      message: `対応していない入力です(.sln / .vbproj のみ): ${absolutePath}`,
+      message: `対応していない入力です(.sln / .vbproj / .csproj のみ): ${absolutePath}`,
     };
   }
   return {
@@ -78,7 +79,7 @@ function detectInDirectory(
   displayName: string,
   deps: TargetResolverDeps,
 ): TargetResolution {
-  // kind: "generic"(VB.NET 以外のプロジェクト)なら .sln / .vbproj を探さない。
+  // kind: "generic"(.sln の無いプロジェクト)なら .sln / .vbproj / .csproj を探さない。
   // 設定を置いた人だけが変わる明示の形(設定の無い既存プロジェクトの挙動は不変)
   if (deps.isGenericConfig?.(directory) === true) {
     return { kind: "generic", rootDir: directory };
@@ -97,7 +98,7 @@ function detectInDirectory(
     if (!TARGET_EXTENSION.test(absolutePath)) {
       return {
         kind: "error",
-        message: `${configFileNameIn(directory, deps.isFile)} の target は .sln / .vbproj を指定してください: ${configured}`,
+        message: `${configFileNameIn(directory, deps.isFile)} の target は .sln / .vbproj / .csproj を指定してください: ${configured}`,
       };
     }
     return { kind: "file", path: absolutePath, autoDetected: true, source: "config" };
@@ -109,11 +110,15 @@ function detectInDirectory(
       message: `ディレクトリを読み取れません: ${directory}`,
     };
   }
-  // .sln 優先、なければ .vbproj(ソリューションがあればそちらが全体を表すため)
-  for (const extension of [".sln", ".vbproj"]) {
+  // .sln 優先、なければ .vbproj / .csproj(ソリューションがあればそちらが全体を表すため)
+  for (const pattern of [/\.sln$/i, PROJECT_FILE]) {
     const candidates = names
-      .filter((name) => name.toLowerCase().endsWith(extension))
+      .filter((name) => pattern.test(name))
       .sort((a, b) => a.localeCompare(b));
+    const extension =
+      pattern === PROJECT_FILE
+        ? projectFilesLabel(candidates.map((name) => projectLanguageOf(name) as ProjectLanguage))
+        : ".sln";
     if (candidates.length === 1) {
       return {
         kind: "file",
@@ -134,8 +139,8 @@ function detectInDirectory(
   return {
     kind: "error",
     message: [
-      `${displayName} に .sln / .vbproj が見つかりません: ${directory}`,
-      `初めてなら npx ${INIT_COMMAND} でセットアップしてください(VB.NET 以外のプロジェクトは ${CONFIG_FILE_NAME} の kind: "generic" で動きます)。`,
+      `${displayName} に .sln / .vbproj / .csproj が見つかりません: ${directory}`,
+      `初めてなら npx ${INIT_COMMAND} でセットアップしてください(.sln の無いプロジェクトは ${CONFIG_FILE_NAME} の kind: "generic" で動きます)。`,
     ].join("\n"),
   };
 }

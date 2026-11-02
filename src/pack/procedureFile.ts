@@ -58,6 +58,7 @@ import {
   renderDocsBlock,
   renderTemplatesBlock,
 } from "./docs.ts";
+import type { ProjectLanguage } from "./projectLanguage.ts";
 import { type DbSchemaEntry, renderDbSchemaBlock } from "./dbChecks.ts";
 import {
   appendBlock,
@@ -144,6 +145,8 @@ export interface ProcedureOptions {
   db?: boolean | undefined;
   /** 構成の種類(設定ファイルの kind。省略時 "solution") */
   layout?: ProcedureLayout | undefined;
+  /** solution 構成のプロジェクトの言語(C# があれば C# の語句にする。省略時は Visual Basic) */
+  languages?: readonly ProjectLanguage[] | undefined;
 }
 
 /**
@@ -165,6 +168,7 @@ export function resolveProcedure(
     tests: options.tests === true,
     db: options.db === true,
     layout: options.layout ?? DEFAULT_PROCEDURE_LAYOUT,
+    languages: options.languages,
   };
   if (options.explicitPath !== undefined) {
     const absolutePath = path.resolve(cwd, options.explicitPath);

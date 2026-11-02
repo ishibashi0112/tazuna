@@ -7,13 +7,13 @@ import { stateDirectoryName } from "../brand.ts";
 import type { Operation } from "../types.ts";
 import { sha256, writeBytes } from "./files.ts";
 
-/** manifest 上の操作種別。"vbproj" は tazuna が自動で行った .vbproj への Compile 登録 (設計書 §11.1) */
+/** manifest 上の操作種別。"vbproj" は tazuna が自動で行った .vbproj / .csproj への Compile 登録 (設計書 §11.1) */
 export type ManifestOp = Operation | "vbproj";
 
 export interface ManifestFileEntry {
   path: string;
   op: ManifestOp;
-  /** この .vbproj に自動登録した .vb (ルート相対)。AI の変更対象と同じ .vbproj に登録した場合も付く */
+  /** この .vbproj / .csproj に自動登録した .vb / .cs (ルート相対)。AI の変更対象と同じファイルに登録した場合も付く */
   registered?: string[];
   /** このファイルに実際に書き込んだか (--partial でスキップされたら false) */
   applied: boolean;

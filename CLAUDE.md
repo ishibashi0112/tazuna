@@ -141,6 +141,19 @@ slnmix 0.22.2 の `src/` を `src/pack/`、テストを `tests/pack/`、test-fix
   `services/environmentSummary.ts` が `<file_summary>` の直後のブロックにする (solution 構成のみ。本文用テキストにも入れる)。
   LangVersion の無い旧スタイルは ToolsVersion の Visual Studio の既定の Visual Basic の版と「みなす」と明記して上限を書く
   (推測したことを宣言する)。手順文 solution の型の規則はこのブロックの版に従わせる (「Option Strict On を前提に」の決め打ちは廃止)
+- C# の .csproj (v0.17.0、手順文 v11。設計書 §17 の 2026-11-02): `pack/projectLanguage.ts` が言語 (vb / cs) ごとの
+  拡張子・既定の Compile グロブ・Designer の接尾辞を持ち、slnParser / vbprojParser / targetResolver は .csproj も読む
+  (VbprojParseResult.language)。名前は vbproj のままのモジュール・型・設定 (`vbproj.register`・`--no-vbproj`・manifest の
+  `op: "vbproj"`) が .csproj も扱う。表記は含まれる言語から作り (projectFilesLabel)、**VB だけのときの出力は C# 対応の前と
+  1 バイトも変えない** (手順文は版数の行だけ。フィクスチャ 9 種で旧版と比べて確認)。readEnvironment は C# では `<Import>` を
+  読まず `<Using>` (Static / Alias) を imports に、Nullable / ImplicitUsings を足す。environmentSummary の C# は ToolsVersion →
+  Visual Studio の既定の C# (12.0 → 5 など)、SDK スタイルは TFM の既定 (net5 → 9 … net10 → 14、netcoreapp3 / netstandard2.1 → 8、
+  .NET Framework・netstandard2.0 → 7.3) と「みなす」。designerSummary の `parseDesignerCs` は this. の有無・行をまたぐ
+  AddRange・逐語的文字列を読み、C# だけイベント (+=) とハンドラーを要約に載せる (VB の Handles 句と違い本体から見えないため)。
+  手順文は `languages` (RenderProcedureOptions) で C# の語句 (SOLUTION_LANGUAGE_TEXT / SOLUTION_VERIFY_LINES) に替える。
+  適用は create した .cs を最寄りの旧スタイル .csproj に登録 (infra/vbproj.ts は最寄りのプロジェクトファイルのある
+  ディレクトリで止まり、別の言語なら other-language)。新規 .cs の手本なしは UTF-8 (BOM あり) / CRLF (BOM の強制は .vb だけ)。
+  dotnet SDK を入れられない環境のため C# のビルドは未確認 (サンプルは tests/fixtures/pack/csharp-legacy・csharp-sdk・mixed)
 - 手順文 v10 の「コード中のコメント」(なぜだけ・経緯は changes.md の概要へ・コメントアウトで残さない・既存の修正履歴を
   手本にしない・変更範囲の食い違うコメントは直す) は、AI 役での v9 / v10 比較 (設計書 §17 の 2026-11-02) を根拠に入れた。
   修正履歴のコメントが社内規約で必須のプロジェクトは procedure.md で書き換える (PACK.md に案内)
@@ -413,7 +426,7 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
 決定事項は同書 §17 決定ログに追記済み。実装した範囲: §11.1 (P1-a) / §11.2 (P1-b) / §11.4。
 §11.3 (P2 目録警告) は slnmix フェーズ 4 (`--manifest`) 後の任意項目のため未着手。
 
-- **P1-a: create した .vb の旧スタイル .vbproj 自動登録** (core/vbproj.ts + infra/vbproj.ts +
+- **P1-a: create した .vb の旧スタイル .vbproj 自動登録** (v0.17.0 から .cs の .csproj も。core/vbproj.ts + infra/vbproj.ts +
   commands/vbproj-register.ts)。XML パーサは入れず行単位の正規表現処理。純粋関数は
   「行配列 in → 挿入位置 + 挿入行 out」(設計書のテキスト in/out から変更: 挿入行だけを
   DocLine (raw: null) として差し込めば §8 の行単位保全がそのまま効くため)。
@@ -514,7 +527,9 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   v0.16.0: 2026-11-02 手順文 v10 (コード中のコメントの方針・自己検証の表の列の差し替え) + パックの `<environment>`
   (.vbproj のビルド環境)。2026-11-02 公開 /
   v0.16.1: 2026-11-02 Shift_JIS のファイルへの「〜」(U+301C) などの JIS と CP932 で対応表の違う 7 文字を
-  CP932 の側にそろえて照合・書き込み (以前は変換できないエラーで止まった)。**未公開** (公開は利用者)。
+  CP932 の側にそろえて照合・書き込み (以前は変換できないエラーで止まった)。公開せず 0.17.0 に含めた /
+  v0.17.0: 2026-11-02 C# の .csproj (パックの論理構成・Designer.cs の UI サマリーとイベント・C# の `<environment>`・
+  手順文 v11・旧スタイル .csproj への登録) + 0.16.1 の修正。**未公開** (公開は利用者)。
   リポジトリ: https://github.com/ishibashi0112/tazuna (旧 https://github.com/ishibashi0112/petari。GitHub が転送する)
   リリース手順: version を上げて `pnpm publish` (`prepublishOnly` が typecheck → test → build を実行。認証はユーザー)
 - **publish 事故と再発防止 (2026-09-14)**: v0.9.0 は `package.json` の version だけ 0.9.0 で、

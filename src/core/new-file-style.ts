@@ -70,9 +70,11 @@ function describe(c: NewFileConfig): string {
 
 /**
  * 作成先に近いディレクトリから順に手本を探し、最初に見つかったディレクトリの多数決で決める。
- * 手本がなければ拡張子別の既定 (.vb → utf8 + BOM + crlf、それ以外 → utf8 / BOM なし / lf)。
+ * 手本がなければ拡張子別の既定 (.vb / .cs → utf8 + BOM + crlf (Visual Studio の新規ファイルと同じ)、
+ * それ以外 → utf8 / BOM なし / lf)。
  * .vb で utf8 かつ BOM なしになった場合は BOM を付ける (BOM なし UTF-8 の日本語は vbc で化ける。
- * ASCII のみの Shift_JIS ファイルが UTF-8 判定される既知の限界への対処でもある)。
+ * ASCII のみの Shift_JIS ファイルが UTF-8 判定される既知の限界への対処でもある)。.cs は手本に従う
+ * (C# のコンパイラは BOM なしの UTF-8 を読める。.NET の SDK スタイルのリポジトリは BOM なしが多い)。
  */
 export function resolveNewFileStyle(
   path: string,
@@ -83,6 +85,8 @@ export function resolveNewFileStyle(
 
   const ext = extensionOf(path);
   const isVb = ext === ".vb";
+  /** Visual Studio が UTF-8 (BOM あり) / CRLF で新規ファイルを作る言語 */
+  const isVsSource = isVb || ext === ".cs";
   let config: NewFileConfig;
   let basis: string;
 
@@ -90,10 +94,10 @@ export function resolveNewFileStyle(
     .map((g) => ({ g, samples: g.sameExt.length > 0 ? g.sameExt : g.others, same: g.sameExt.length > 0 }))
     .find((x) => x.samples.length > 0);
   if (found === undefined) {
-    config = isVb
+    config = isVsSource
       ? { encoding: "utf8", bom: true, eol: "crlf" }
       : { encoding: "utf8", bom: false, eol: "lf" };
-    basis = `手本となる既存ファイルなし → ${isVb ? ".vb" : "拡張子"} の既定`;
+    basis = `手本となる既存ファイルなし → ${isVsSource ? ext : "拡張子"} の既定`;
   } else {
     const { g, samples, same } = found;
     const encoding = majority(
@@ -104,7 +108,7 @@ export function resolveNewFileStyle(
     const bom =
       encoding === "utf8" ? majority(utf8Samples.map((s) => s.bom), true) : false;
     const eols = samples.map((s) => s.eol).filter((e): e is Eol => e !== null);
-    const eol = eols.length > 0 ? majority(eols, "crlf") : isVb ? "crlf" : "lf";
+    const eol = eols.length > 0 ? majority(eols, "crlf") : isVsSource ? "crlf" : "lf";
     config = { encoding, bom, eol };
     const what = same
       ? `${ext === "" ? "拡張子なし" : ext} ${samples.length} ファイル`

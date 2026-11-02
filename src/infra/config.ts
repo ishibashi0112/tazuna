@@ -17,7 +17,7 @@ export interface LocalConfig {
   vscodeCommand: string;
   /** 失敗レポート出力時にクリップボードへ自動コピーする (§7)。--clip-report は常に有効 */
   clipReportOnFailure: boolean;
-  /** create した .vb を旧スタイル .vbproj へ自動登録する (設計書 §11.1)。--no-vbproj で一時無効化 */
+  /** create した .vb / .cs を旧スタイル .vbproj / .csproj へ自動登録する (設計書 §11.1)。--no-vbproj で一時無効化 */
   vbproj: { register: boolean };
 }
 

@@ -45,6 +45,7 @@ function makeItem(
 function makeResult(items: ProjectItem[]): VbprojParseResult {
   return {
     projectPath: "/tmp/proj/Test.vbproj",
+    language: "vb",
     projectDir: "/tmp/proj",
     projectStyle: "legacy",
     defaultCompileGlobExpanded: false,

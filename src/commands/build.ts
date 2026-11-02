@@ -51,7 +51,7 @@ export function buildCommand(argv: string[]): number {
   }
   if (resolved.targetPath === undefined) {
     err(
-      `${BUILD_COMMAND} は .sln / .vbproj の構成でのみ使えます(kind: "generic" のプロジェクトは、そのプロジェクトのビルド・テストのコマンドを使ってください)。`,
+      `${BUILD_COMMAND} は .sln / .vbproj / .csproj の構成でのみ使えます(kind: "generic" のプロジェクトは、そのプロジェクトのビルド・テストのコマンドを使ってください)。`,
     );
     return 1;
   }

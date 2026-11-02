@@ -119,7 +119,7 @@ export async function applyCommand(argv: string[], detected?: DetectedChanges): 
       yes: { type: "boolean", short: "y", default: false },
       clip: { type: "boolean", default: false },
       "clip-report": { type: "boolean", default: false },
-      // create した .vb の .vbproj 自動登録を今回だけ無効化 (config vbproj.register の一時上書き)
+      // create した .vb / .cs の .vbproj / .csproj 自動登録を今回だけ無効化 (config vbproj.register の一時上書き)
       "no-vbproj": { type: "boolean", default: false },
       // 履歴で適用済みの changes.md でも再適用する (二重適用防止の解除・§6.1)
       force: { type: "boolean", default: false },
@@ -320,7 +320,7 @@ export async function applyCommand(argv: string[], detected?: DetectedChanges): 
     return 1;
   }
   const applicable = plan.outcomes.filter(isApplicable);
-  // create した .vb の旧スタイル .vbproj への登録計画 (設計書 §11.1)。失敗しても create は成功扱い
+  // create した .vb / .cs の旧スタイル .vbproj / .csproj への登録計画 (設計書 §11.1)。失敗しても create は成功扱い
   const vbprojEnabled = config.vbproj.register && !values["no-vbproj"];
   const vbprojPlan: VbprojPlan = vbprojEnabled
     ? planVbprojRegistrations(root, applicable)

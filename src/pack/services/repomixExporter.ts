@@ -35,9 +35,12 @@ import { decodeShiftJis } from "../../core/encoding.ts";
 import { type MaskFinding, maskCredentials } from "../../core/mask.ts";
 import { sourceLanguageOf } from "../../core/source-lexer.ts";
 import {
+  formatDesignerEvents,
+  parseDesignerCs,
   parseDesignerVb,
   renderDesignerControlLines,
 } from "./designerSummary.ts";
+import { LANGUAGES, designerLanguageOf, projectFilesLabel } from "../projectLanguage.ts";
 import {
   collectExtraRoots,
   collectGitFiles,
@@ -290,7 +293,7 @@ function escapeAttribute(value: string): string {
 }
 
 /**
- * 除外した *.Designer.vb から <ui_summary> エントリを生成する。
+ * 除外した *.Designer.vb / *.Designer.cs から <ui_summary> エントリを生成する。
  * 対象外・読めない・コントロールが取れない場合は undefined
  * (呼び出し側は通常のスキップ扱いにする)。
  * maskEnabled 時は要約前の Designer ソースにマスクを適用する
@@ -304,11 +307,13 @@ function buildUiSummaryEntry(
   strictMask: boolean,
 ): { entry: string; findings: MaskFinding[] } | undefined {
   const item = node.item;
+  const fileName = item.logicalPath.split("\\").pop() ?? item.logicalPath;
+  const language = designerLanguageOf(fileName);
   if (
     !item.isSensitive ||
     item.sourcePath === undefined ||
     !item.exists ||
-    !/\.designer\.vb$/i.test(item.logicalPath)
+    language === undefined
   ) {
     return undefined;
   }
@@ -321,26 +326,31 @@ function buildUiSummaryEntry(
   }
   let findings: MaskFinding[] = [];
   if (maskEnabled) {
-    const masked = maskCredentials(source, {
-      vbSource: true,
-      strict: strictMask,
-    });
+    // C# の Designer.cs はパックの .cs と同じく、文字列・コメントの中だけを伏せる
+    const masked =
+      language === "vb"
+        ? maskCredentials(source, { vbSource: true, strict: strictMask })
+        : maskCredentials(source, { vbSource: false, language: sourceLanguageOf(fileName), strict: strictMask });
     source = masked.content;
     findings = masked.findings;
   }
-  const summary = parseDesignerVb(source);
+  const summary = language === "vb" ? parseDesignerVb(source) : parseDesignerCs(source);
   if (summary.controlCount === 0) {
     return undefined;
   }
-  const fileName = item.logicalPath.split("\\").pop() ?? item.logicalPath;
   const formName =
-    summary.className ?? fileName.replace(/\.designer\.vb$/i, "");
+    summary.className ?? fileName.slice(0, fileName.length - LANGUAGES[language].designerSuffix.length);
   const lines = [
     `<ui_summary path="${escapeAttribute(displayPath)}" form="${escapeAttribute(formName)}">`,
-    "Designer 自動生成コードからの要約(コントロール名: 型 — Text。座標・サイズ等のレイアウトは省略):",
+    language === "vb"
+      ? "Designer 自動生成コードからの要約(コントロール名: 型 — Text。座標・サイズ等のレイアウトは省略):"
+      : "Designer 自動生成コードからの要約(コントロール名: 型 — Text — イベント イベント名 → ハンドラー。座標・サイズ等のレイアウトは省略):",
   ];
   if (summary.formText !== undefined) {
     lines.push(`フォームタイトル: "${summary.formText}"`);
+  }
+  if (summary.formEvents !== undefined && summary.formEvents.length > 0) {
+    lines.push(`フォームのイベント: ${formatDesignerEvents(summary.formEvents)}`);
   }
   lines.push(...renderDesignerControlLines(summary.rootControls));
   lines.push("</ui_summary>");
@@ -786,6 +796,16 @@ export function buildRepomixOutput(
   const sdkExpandedLabels = sources
     .filter((source) => source.parseResult.defaultCompileGlobExpanded)
     .map((source) => source.label);
+  // 既定の Compile グロブ(**/*.vb、C# は **/*.cs)。VB だけなら C# 対応の前と同じ表記
+  const sdkExpandedGlobs = [
+    ...new Set(
+      sources
+        .filter((source) => source.parseResult.defaultCompileGlobExpanded)
+        .map((source) => LANGUAGES[source.parseResult.language].defaultCompileGlob),
+    ),
+  ];
+  const projectLanguages = sources.map((source) => source.parseResult.language);
+  const projectFiles = projectFilesLabel(projectLanguages);
   const rootName = rootDir === undefined ? undefined : path.basename(rootDir);
 
   const generic = options.layout === "generic";
@@ -798,6 +818,7 @@ export function buildRepomixOutput(
           projectPath:
             (rootDir === undefined ? undefined : relativeWithinRoot(rootDir, source.parseResult.projectPath)) ??
             path.basename(source.parseResult.projectPath),
+          language: source.parseResult.language,
           style: source.parseResult.projectStyle,
           environment: source.parseResult.environment,
         })),
@@ -808,7 +829,7 @@ export function buildRepomixOutput(
       ? `このファイルは ${TOOL_NAME} が「${title}」の git が管理しているファイル(git ls-files)に基づき、ソースコードを 1 ファイルにまとめたものです(Repomix 形式)。`
       : generic
       ? `このファイルは ${TOOL_NAME} が「${title}」の ${configFileName}(extraRoots)に宣言されたディレクトリに基づき、ソースコードを 1 ファイルにまとめたものです(Repomix 形式)。`
-      : `このファイルは ${TOOL_NAME} が「${title}」の論理構成(.sln / .vbproj)に基づき、ソースコードを 1 ファイルにまとめたものです(Repomix 形式)。`,
+      : `このファイルは ${TOOL_NAME} が「${title}」の論理構成(.sln / ${projectFiles})に基づき、ソースコードを 1 ファイルにまとめたものです(Repomix 形式)。`,
     "",
     "<file_summary>",
     "<purpose>",
@@ -869,7 +890,7 @@ export function buildRepomixOutput(
       : "- .gitignore は考慮していない(設定 exportRespectGitignore で無効化されている)",
     ...(sdkExpandedLabels.length > 0
       ? [
-          `- SDK スタイルのプロジェクト(${sdkExpandedLabels.join(", ")})は Compile を明示列挙しないため、既定の Compile グロブ(**/*.vb)を展開した(bin/ obj/ ドットフォルダ・*.user・<Compile Remove> は除外)。MSBuild の完全評価ではない`,
+          `- SDK スタイルのプロジェクト(${sdkExpandedLabels.join(", ")})は Compile を明示列挙しないため、既定の Compile グロブ(${sdkExpandedGlobs.join(" / ")})を展開した(bin/ obj/ ドットフォルダ・*.user・<Compile Remove> は除外)。MSBuild の完全評価ではない`,
         ]
       : []),
     ...(extra !== undefined && gitFiles !== undefined
@@ -881,7 +902,7 @@ export function buildRepomixOutput(
       ? [
           generic
             ? `- [${extraRoots.map((r) => r.kind).join("] [")}] のグループは ${configFileName} の extraRoots に宣言されたディレクトリ(<file> の root 属性)。宣言されていないディレクトリは含まれない`
-            : `- [${extraRoots.map((r) => r.kind).join("] [")}] のグループは .vbproj に乗らない追加ディレクトリ(${configFileName} の extraRoots。<file> の root 属性)。認証情報マスクは VB 側と同様に適用済み`,
+            : `- [${extraRoots.map((r) => r.kind).join("] [")}] のグループは ${projectFiles} に乗らない追加ディレクトリ(${configFileName} の extraRoots。<file> の root 属性)。認証情報マスクは ${projectLanguages.includes("cs") ? "プロジェクトのファイル" : "VB 側"}と同様に適用済み`,
         ]
       : []),
     ...(generatedDirs.length > 0

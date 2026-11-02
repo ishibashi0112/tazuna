@@ -68,11 +68,20 @@
  *   プロパティ・コントロール・列がパック内にあるか」に替える(添付の読み取りでは空行が
  *   見えず確かめようがない。照合の空白・空行の差は適用ツールが吸収する)。方針の段にも
  *   同じ確かめを置く(changes.md を出す前に直せるように)。コメントと環境の確認を自己検証に足す
+ *
+ * v11 (2026-11-02、C# の .csproj への対応): solution 構成に C# のプロジェクトがあるときだけ、
+ * Visual Basic 固有の語句(VB.NET・Designer.vb・.vbproj・Option Strict・Handles 句)を C# の語句
+ * (Designer.cs・.csproj・Nullable・+= によるイベントの結び付け)に替えるか併記する
+ * (SOLUTION_LANGUAGE_TEXT / SOLUTION_VERIFY_LINES)。C# の WinForms はイベントの結び付けが
+ * Designer.cs にあるため、新しく結び付けるときの置き場所と、結び付け済みのものを重ねない
+ * (ハンドラーが 2 回呼ばれる)ことを書く。Visual Basic だけのソリューションと generic 構成の
+ * 本文は v10 と同じ(版数の行だけ)
  */
 
 import { PACK_COMMAND, TOOL_NAME } from "../../brand.ts";
+import type { ProjectLanguage } from "../projectLanguage.ts";
 
-export const PROCEDURE_VERSION = 10;
+export const PROCEDURE_VERSION = 11;
 
 /** 構成の種類(設定ファイルの kind と同じ。手順文の表現の切り替えに使う) */
 export const PROCEDURE_LAYOUTS = ["solution", "generic"] as const;
@@ -162,8 +171,45 @@ const VERIFY_LAYOUT_LINES: Readonly<Record<ProcedureLayout, readonly string[]>> 
   ],
 };
 
-function verifyBody(layout: ProcedureLayout): string {
-  return [VERIFY_HEAD, ...VERIFY_LAYOUT_LINES[layout], VERIFY_TAIL].join("\n");
+/**
+ * solution 構成のプロジェクトの言語の組み合わせ。"vb" は Visual Basic だけ(C# 対応の前と同じ本文)、
+ * "cs" は C# だけ、"vb+cs" は両方を含むソリューション
+ */
+export type SolutionLanguages = "vb" | "cs" | "vb+cs";
+
+/** プロジェクトの言語の一覧から組み合わせを決める(空・省略は Visual Basic) */
+export function solutionLanguagesOf(languages: readonly ProjectLanguage[] | undefined): SolutionLanguages {
+  const hasCs = languages?.includes("cs") === true;
+  const hasVb = languages?.includes("vb") === true;
+  if (hasCs && hasVb) {
+    return "vb+cs";
+  }
+  return hasCs ? "cs" : "vb";
+}
+
+const SHIFT_JIS_VERIFY_LINE = "- 日本語 Shift_JIS のファイルに、Shift_JIS で表現できない文字を入れていない";
+
+/** C# を含む solution 構成の自己検証の行(Visual Basic だけなら VERIFY_LAYOUT_LINES.solution) */
+const SOLUTION_VERIFY_LINES: Readonly<Record<Exclude<SolutionLanguages, "vb">, readonly string[]>> = {
+  cs: [
+    "- <environment> の C# と .NET の版で使えない構文・API を使っていない",
+    "- += で結び付けたイベント名・コントロール名が <ui_summary> と一致し、<ui_summary> で結び付け済みのイベントを重ねて結び付けていない",
+    "- Designer.cs / .resx / Generated / src/generated を変更していない",
+    "- 新規ファイルは create で出し、.csproj を編集していない",
+    SHIFT_JIS_VERIFY_LINE,
+  ],
+  "vb+cs": [
+    "- <environment> の各プロジェクトの言語(Visual Basic / C#)と .NET の版で使えない構文・API を使っていない",
+    "- Handles 句と += のイベント名・コントロール名が <ui_summary> と一致し、C# では <ui_summary> で結び付け済みのイベントを重ねて結び付けていない",
+    "- Designer.vb / Designer.cs / .resx / Generated / src/generated を変更していない",
+    "- 新規ファイルは create で出し、.vbproj / .csproj を編集していない",
+    SHIFT_JIS_VERIFY_LINE,
+  ],
+};
+
+function verifyBody(layout: ProcedureLayout, language: SolutionLanguages = "vb"): string {
+  const lines = layout === "solution" && language !== "vb" ? SOLUTION_VERIFY_LINES[language] : VERIFY_LAYOUT_LINES[layout];
+  return [VERIFY_HEAD, ...lines, VERIFY_TAIL].join("\n");
 }
 
 /** 後方互換: solution 構成の自己検証本文 */
@@ -197,6 +243,41 @@ export const LAYOUT_TEXT: Readonly<Record<ProcedureLayout, Readonly<Record<strin
   },
 };
 
+const CS_EVENT_RULE =
+  "イベントを新しく結び付けるときは、Designer.cs ではなくフォームのコンストラクターの InitializeComponent() の後に += で書き、<ui_summary> で結び付け済みのイベントを重ねて結び付けないでください(ハンドラーが 2 回呼ばれます)";
+
+const CS_NULLABLE_RULE = "Nullable が有効なプロジェクトでは、null になり得る参照型に ? を付け、! で警告を消さないでください";
+
+/**
+ * C# を含む solution 構成で LAYOUT_TEXT.solution の代わりに使う語句(v11)。Visual Basic だけなら
+ * LAYOUT_TEXT.solution(v10 と同じ)
+ */
+export const SOLUTION_LANGUAGE_TEXT: Readonly<Record<Exclude<SolutionLanguages, "vb">, Readonly<Record<string, string>>>> = {
+  cs: {
+    NOTE: ", language: C#",
+    STACK: "一般的な C# / React のコード",
+    READ_UI_SUMMARY: `- <ui_summary> は Designer.cs からの要約です。コントロール名・型と、Designer.cs で結び付け済みのイベント(イベント名 → ハンドラー)はここから引いてください。Designer.cs 本体は変更対象にしません。${CS_EVENT_RULE}\n`,
+    READ_NEW_FILES:
+      "- 新規ファイルは changes.md の create で出してください。.csproj は編集しないでください(適用ツールが登録します)。パスは <file_summary> に示す物理パスの規則で書いてください",
+    ASK_EXAMPLES: LAYOUT_TEXT.solution.ASK_EXAMPLES!,
+    TYPE_RULE: `- 構文と API は、<environment> に書かれた C# と .NET の版で使えるものだけにしてください(新しい Visual Studio でビルドしていても、古い構文は通ります)。パック内の既存コードで使われている構文は使って構いません\n- ${CS_NULLABLE_RULE}`,
+  },
+  "vb+cs": {
+    NOTE: ", language: VB / C#",
+    STACK: "一般的な VB.NET / C# / React のコード",
+    READ_UI_SUMMARY: `- <ui_summary> は Designer.vb / Designer.cs からの要約です。コントロール名・型(Designer.cs は結び付け済みのイベントも)はここから引いてください。Designer.vb / Designer.cs 本体は変更対象にしません。C# のフォームで${CS_EVENT_RULE}\n`,
+    READ_NEW_FILES:
+      "- 新規ファイルは changes.md の create で出してください。.vbproj / .csproj は編集しないでください(適用ツールが登録します)。パスは <file_summary> に示す物理パスの規則で書いてください",
+    ASK_EXAMPLES: LAYOUT_TEXT.solution.ASK_EXAMPLES!,
+    TYPE_RULE: `- 構文と API は、<environment> に書かれた各プロジェクトの言語(Visual Basic / C#)と .NET の版で使えるものだけにしてください(新しい Visual Studio でビルドしていても、古い構文は通ります)。パック内の既存コードで使われている構文は使って構いません\n- Visual Basic は Option Strict が Off のプロジェクトでも、型変換は明示してください\n- C# で${CS_NULLABLE_RULE}`,
+  },
+};
+
+/** 構成の種類と言語の組み合わせから {{LAYOUT:...}} の語句を選ぶ */
+function layoutTextFor(layout: ProcedureLayout, language: SolutionLanguages): Readonly<Record<string, string>> {
+  return layout === "solution" && language !== "vb" ? SOLUTION_LANGUAGE_TEXT[language] : LAYOUT_TEXT[layout];
+}
+
 const DESIGN_INVESTIGATE_BODY = `受領した資料(テーブル定義・既存画面のコード・プロトタイプ等)と、手本にする既存コードを読み、分かったことを箇条書きで挙げてください。
 既存コードの流儀(SQL の書き方・ファイル構成・命名・エラー処理・監査列)のうち踏襲するものを挙げてください。
 資料から読み取れないことは推測せず、次の「確認事項」に回します。`;
@@ -219,8 +300,11 @@ function section(number: number, title: string, body: string): string {
   return `### ${number}. ${title}\n${body}`;
 }
 
-function buildModeSections(layout: ProcedureLayout): Readonly<Record<ProcedureMode, string>> {
-  const VERIFY_BODY = verifyBody(layout);
+function buildModeSections(
+  layout: ProcedureLayout,
+  language: SolutionLanguages = "vb",
+): Readonly<Record<ProcedureMode, string>> {
+  const VERIFY_BODY = verifyBody(layout, language);
   return {
   full: [
     section(1, "調査", INVESTIGATE_BODY),
@@ -276,6 +360,16 @@ export const MODE_SECTIONS_BY_LAYOUT: Readonly<
 
 /** 後方互換: solution 構成の「回答の構成」(v6 と同一) */
 export const MODE_SECTIONS = MODE_SECTIONS_BY_LAYOUT.solution;
+
+/** C# を含む solution 構成の「回答の構成」(自己検証の言語固有の行だけが違う) */
+const SOLUTION_MODE_SECTIONS: Readonly<Record<Exclude<SolutionLanguages, "vb">, Readonly<Record<ProcedureMode, string>>>> = {
+  cs: buildModeSections("solution", "cs"),
+  "vb+cs": buildModeSections("solution", "vb+cs"),
+};
+
+function modeSectionsFor(layout: ProcedureLayout, language: SolutionLanguages): Readonly<Record<ProcedureMode, string>> {
+  return layout === "solution" && language !== "vb" ? SOLUTION_MODE_SECTIONS[language] : MODE_SECTIONS_BY_LAYOUT[layout];
+}
 
 /**
  * docs/ 連携が有効なときだけ手順文の末尾に付く 2 節。
@@ -413,6 +507,11 @@ export interface RenderProcedureOptions {
    * 中身がこれで決まる
    */
   layout?: ProcedureLayout | undefined;
+  /**
+   * solution 構成のプロジェクトの言語(v11)。C# があるときは Visual Basic 固有の語句を C# の語句に
+   * 替えるか併記する。省略・空は Visual Basic だけ(v10 と同じ本文)。generic 構成では使わない
+   */
+  languages?: readonly ProjectLanguage[] | undefined;
 }
 
 /**
@@ -427,10 +526,11 @@ export function renderProcedureTemplate(
   options: RenderProcedureOptions = {},
 ): string {
   const layout = options.layout ?? DEFAULT_PROCEDURE_LAYOUT;
+  const language = solutionLanguagesOf(options.languages);
   let rendered = template
-    .replaceAll("{{MODE_SECTIONS}}", MODE_SECTIONS_BY_LAYOUT[layout][mode])
+    .replaceAll("{{MODE_SECTIONS}}", modeSectionsFor(layout, language)[mode])
     .replaceAll("{{MODE}}", mode);
-  for (const [name, text] of Object.entries(LAYOUT_TEXT[layout])) {
+  for (const [name, text] of Object.entries(layoutTextFor(layout, language))) {
     rendered = rendered.replaceAll(`{{LAYOUT:${name}}}`, text);
   }
   if (options.docs !== "placeholder") {

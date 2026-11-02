@@ -2,7 +2,7 @@
  * tazuna init: 初回セットアップを 1 コマンドにまとめる(旧 slnmix init + petari init。設計書 §20・§25)。
  *
  * 1. 構成: 設定ファイル(tazuna.config.json。旧名 slnmix.config.json も)があればそのまま使う。なければ
- *    - 直下に .sln / .vbproj があれば設定を作らない(従来どおり自動検出)
+ *    - 直下に .sln / .vbproj / .csproj があれば設定を作らない(従来どおり自動検出)
  *    - 直下に無く、1 段下のフォルダに .sln が 1 つだけあれば target で指す設定を作る
  *    - どちらも無ければ --init-config と同じ generic 構成を作る
  * 2. docs/ 連携(--init-docs と同じ)
@@ -61,7 +61,7 @@ export const GENERATED_OUTPUTS: readonly string[] = [
 /** 1 段下の .sln を探すときに見ないフォルダ(ドットで始まるものも見ない) */
 const SKIPPED_SUBDIRECTORIES = new Set(["node_modules", "bin", "obj", "packages"]);
 
-const TARGET_EXTENSION = /\.(sln|vbproj)$/i;
+const TARGET_EXTENSION = /\.(sln|vbproj|csproj)$/i;
 
 /** .git のある最も近い祖先(自身を含む)。無ければ undefined */
 export function findRepositoryRoot(
@@ -164,8 +164,8 @@ function setUpLayout(rootDir: string, deps: InitProjectDeps): LayoutStep {
       return {
         kind: "error",
         message: [
-          `${configName} はありますが、対象が決まりません(直下に .sln / .vbproj が無く、target も kind: "generic" もありません)。`,
-          `.sln がサブフォルダにあれば "target": "<フォルダ>/<名前>.sln" を、VB.NET 以外なら "kind": "generic" と extraRoots を書いてから、もう一度実行してください。`,
+          `${configName} はありますが、対象が決まりません(直下に .sln / .vbproj / .csproj が無く、target も kind: "generic" もありません)。`,
+          `.sln がサブフォルダにあれば "target": "<フォルダ>/<名前>.sln" を、.sln の無いプロジェクトなら "kind": "generic" と extraRoots を書いてから、もう一度実行してください。`,
         ].join("\n"),
       };
     }
@@ -214,14 +214,14 @@ function setUpLayout(rootDir: string, deps: InitProjectDeps): LayoutStep {
     };
   }
 
-  // VB.NET 以外のプロジェクト。git のリポジトリなら git が管理しているファイルを対象にする
+  // .sln の無いプロジェクト。git のリポジトリなら git が管理しているファイルを対象にする
   const result = initConfig(rootDir, deps, { gitRepository: findRepositoryRoot(rootDir, deps.exists) !== undefined });
   if (result.kind === "error") {
     return {
       kind: "error",
       message: [
-        `.sln / .vbproj が直下にも 1 段下のフォルダにもありません。VB.NET のプロジェクトなら ${configName} に "target": "<フォルダ>/<名前>.sln" を書いてから、もう一度実行してください。`,
-        `VB.NET 以外のプロジェクトの場合: ${result.message}`,
+        `.sln / .vbproj / .csproj が直下にも 1 段下のフォルダにもありません。VB.NET / C# のプロジェクトなら ${configName} に "target": "<フォルダ>/<名前>.sln" を書いてから、もう一度実行してください。`,
+        `.sln の無いプロジェクトの場合: ${result.message}`,
       ].join("\n"),
     };
   }
@@ -233,9 +233,9 @@ function setUpLayout(rootDir: string, deps: InitProjectDeps): LayoutStep {
       kind: "ok",
       layout: "generic",
       lines: [
-        `1. 構成: generic(.sln / .vbproj が無いため、git が管理しているファイルを対象にする ${configName} を作りました)`,
+        `1. 構成: generic(.sln / .vbproj / .csproj が無いため、git が管理しているファイルを対象にする ${configName} を作りました)`,
         `   対象を絞るときは .repomixignore に除外を書くか、${configName} の extraRoots にディレクトリを書いてください`,
-        `   VB.NET のプロジェクトで .sln が 2 段以上深い場合は見つけられません。kind の代わりに "target": "<パス>/<名前>.sln" を書いてください`,
+        `   VB.NET / C# のプロジェクトで .sln が 2 段以上深い場合は見つけられません。kind の代わりに "target": "<パス>/<名前>.sln" を書いてください`,
       ],
     };
   }
@@ -243,9 +243,9 @@ function setUpLayout(rootDir: string, deps: InitProjectDeps): LayoutStep {
     kind: "ok",
     layout: "generic",
     lines: [
-      `1. 構成: generic(.sln / .vbproj が無いため ${configName} を作りました)`,
+      `1. 構成: generic(.sln / .vbproj / .csproj が無いため ${configName} を作りました)`,
       ...result.roots.map((root) => `   extraRoots: ${root.path}/(kind: "${root.kind}")`),
-      `   VB.NET のプロジェクトで .sln が 2 段以上深い場合は見つけられません。kind と extraRoots の代わりに "target": "<パス>/<名前>.sln" を書いてください`,
+      `   VB.NET / C# のプロジェクトで .sln が 2 段以上深い場合は見つけられません。kind と extraRoots の代わりに "target": "<パス>/<名前>.sln" を書いてください`,
     ],
   };
 }

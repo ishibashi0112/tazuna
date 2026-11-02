@@ -55,7 +55,8 @@ watch はブラウザのダウンロード先とコードが同じ PC にある�
 web と dotnet を分けたアプリ (webview2-bridge の雛形。`.sln` は `dotnet/` の下) でも同じです。
 雛形に同梱の設定ファイル (`slnmix.config.json`。`target` と `extraRoots`) がアプリのルートにあるので、
 そこで `npx tazuna pack` と打てばアプリのルート基準のパックになり、変更を当てるときのルートと一致します。
-VB.NET 以外のプロジェクト (TypeScript・Python・C# など。`.sln` が無い) も、初回の `npx tazuna init` が
+C# のプロジェクトも `.sln` / `.csproj` があれば VB.NET と同じ流れです (0.17.0。手順文と UI サマリーが C# 向けになる)。
+`.sln` の無いプロジェクト (TypeScript・Python など) も、初回の `npx tazuna init` が
 generic 構成の設定を作るので、あとは同じです (3-7)。
 
 ## 1. 登場するもの
@@ -209,14 +210,14 @@ changes.md (`changes (1).md` などの連番付きでもそのまま使えます
 git で手動で戻したなど、本当に当て直したいときだけ `--force` を付けます
 (`npx tazuna undo` で戻したものは付けなくても当て直せます)。
 
-### 3-7. VB.NET 以外のプロジェクト (TypeScript・Python・C# など) で使う
+### 3-7. .sln の無いプロジェクト (TypeScript・Python など) で使う
 
-`.sln` / `.vbproj` の無いプロジェクトでも、`tazuna pack` → Copilot Chat → `tazuna` の流れは
+`.sln` / `.vbproj` / `.csproj` の無いプロジェクトでも、`tazuna pack` → Copilot Chat → `tazuna` の流れは
 そのまま使えます。本家 repomix で代用すると `.prompt.md` (本文に貼る手順文・規約文) が
 作れず、添付末尾に埋めた規約文は Copilot に無視されるため、AI の返答が changes.md の
 規約から外れてパースで落ちます。`tazuna pack` を使えばその経路を塞げます。
 
-1. `npx tazuna init` (一回だけ。リポジトリ直下で)。`.sln` / `.vbproj` が無いので、
+1. `npx tazuna init` (一回だけ。リポジトリ直下で)。`.sln` / `.vbproj` / `.csproj` が無いので、
    `tazuna.config.json` に `"kind": "generic"` だけを書く
 2. 以降は 0 章と同じ。`npx tazuna pack` が「対象: generic 構成」と表示し、**git が管理しているファイル**
    (コミット済みのものと、`.gitignore` に一致しない未コミットのもの) でパックと `.prompt.md` を作る。
