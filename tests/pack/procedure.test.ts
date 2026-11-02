@@ -319,14 +319,15 @@ suite("procedure: 描画", () => {
 });
 
 suite("procedure: 構成の種類(layout、v7)", () => {
-  test("solution のプレースホルダ置換後の文面は v6 と同じ語句を保つ", () => {
+  test("solution のプレースホルダ置換後の文面は v6 と同じ語句を保つ(型の規則は v10 で <environment> を見る形に変えた)", () => {
     const text = renderBuiltinProcedure("full", { tests: true });
     for (const phrase of [
       "一般的な VB.NET / React のコード",
       "<ui_summary> は Designer.vb からの要約です",
       ".vbproj は編集しないでください",
       "「どのフォームか」",
-      "Option Strict On",
+      "Option Strict が Off のプロジェクトでも、型変換は明示してください",
+      "<environment> に書かれた Visual Basic と .NET Framework の版",
       "Handles 句",
       "Shift_JIS",
       "e2e/screen/",
@@ -345,6 +346,7 @@ suite("procedure: 構成の種類(layout、v7)", () => {
         ".vbproj",
         "フォームか",
         "Option Strict",
+        "<environment>",
         "Handles",
         "Shift_JIS",
         "e2e/screen/",
@@ -400,5 +402,73 @@ suite("procedure: 構成の種類(layout、v7)", () => {
       renderProcedureTemplate(custom, "full", { layout: "generic" }),
       renderProcedureTemplate(custom, "full"),
     );
+  });
+});
+
+suite("procedure: v10(コメント方針・<environment>・自己検証の表)", () => {
+  const COMMENT_HEADING = "\n## コード中のコメント\n\n- ";
+
+  test("どの構成・モードでも「コード中のコメント」の節が「判断の原則」の直後に 1 回だけある", () => {
+    for (const layout of ["solution", "generic"] as const) {
+      for (const mode of PROCEDURE_MODES) {
+        const text = renderBuiltinProcedure(mode, { layout, docs: true, tests: true, db: true });
+        assert.strictEqual(text.split(COMMENT_HEADING).length, 2, `${layout}/${mode}`);
+        const principles = text.indexOf("\n## 判断の原則\n");
+        const comments = text.indexOf(COMMENT_HEADING);
+        assert.ok(principles >= 0 && principles < comments, `${layout}/${mode}: 判断の原則の後にない`);
+        const between = text.slice(principles + 1, comments);
+        assert.ok(!between.slice(3).includes("\n## "), `${layout}/${mode}: 間に別の節がある`);
+        const docs = text.indexOf("\n## 文書(docs/)の扱い");
+        assert.ok(comments < docs, `${layout}/${mode}: docs の節より前にない`);
+      }
+    }
+  });
+
+  test("コメントの節: なぜだけ・経緯は changes.md へ・コメントアウトで残さない・修正履歴を手本にしない・範囲内の食い違いは直す", () => {
+    const text = renderBuiltinProcedure("full");
+    const section = text.slice(text.indexOf(COMMENT_HEADING));
+    for (const phrase of [
+      "「なぜそうするか」",
+      "「何をしているか」は書かないでください",
+      "changes.md の CHANGES の概要に書いてください",
+      "古いコードをコメントアウトして残さないでください",
+      "既存コードにある修正履歴のコメント(日付・担当者・START / END の印など)は、書き方の手本にしないでください",
+      "変更する範囲の外のコメントには触れないでください",
+    ]) {
+      assert.ok(section.includes(phrase), `コメントの節に「${phrase}」がない`);
+    }
+    assert.ok(text.includes("ただしコメントは次の「コード中のコメント」に従います"));
+  });
+
+  test("自己検証の表から「空行・インデント込みで逐語一致か」を外し、呼んでいるものの実在を確かめる列にした", () => {
+    for (const layout of ["solution", "generic"] as const) {
+      for (const mode of ["full", "implement"] as const) {
+        const text = MODE_SECTIONS_BY_LAYOUT[layout][mode];
+        assert.ok(!text.includes("空行・インデント込みで逐語一致か"), `${layout}/${mode}`);
+        assert.ok(
+          text.includes(
+            "| ファイル | ブロック | パック内に全文があるか | ファイル内で一意か | 呼んでいる既存のメソッド・プロパティ・コントロール・列がパック内にあるか |",
+          ),
+          `${layout}/${mode}`,
+        );
+        assert.ok(text.includes("コメントアウトした古いコードが入っていない"), `${layout}/${mode}`);
+      }
+    }
+  });
+
+  test("方針の段(full / plan)で、呼ぶ既存のものをパック内で確かめさせる", () => {
+    for (const mode of ["full", "plan"] as const) {
+      assert.ok(
+        MODE_SECTIONS[mode].includes("変更で呼ぶ既存のメソッド・プロパティ・コントロール・列は、パック内で定義を確かめたものだけにしてください"),
+        mode,
+      );
+    }
+  });
+
+  test("solution の自己検証にだけ <environment> の版の確認がある", () => {
+    const line = "- <environment> の Visual Basic と .NET Framework の版で使えない構文・API を使っていない";
+    assert.ok(MODE_SECTIONS_BY_LAYOUT.solution.full.includes(line));
+    assert.ok(MODE_SECTIONS_BY_LAYOUT.solution.implement.includes(line));
+    assert.ok(!MODE_SECTIONS_BY_LAYOUT.generic.full.includes("<environment>"));
   });
 });

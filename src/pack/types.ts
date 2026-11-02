@@ -67,6 +67,28 @@ export interface ParseDiagnostic {
  */
 export type ProjectStyle = "legacy" | "sdk";
 
+/**
+ * .vbproj から静的に読んだビルド環境(手順文 v10。<environment> の材料)。
+ * プロパティは出現順の値をすべて残す(Condition 付きの PropertyGroup で値が分かれることがあるため。
+ * Condition は評価しない)。指定の無いものは空配列
+ */
+export interface ProjectEnvironment {
+  /** <Project ToolsVersion="..."> */
+  toolsVersion?: string | undefined;
+  /** 旧スタイルの TargetFrameworkVersion(v4.5 など)と SDK スタイルの TargetFramework / TargetFrameworks */
+  targetFrameworks: string[];
+  langVersions: string[];
+  optionStrict: string[];
+  optionExplicit: string[];
+  optionInfer: string[];
+  optionCompare: string[];
+  rootNamespaces: string[];
+  /** プロジェクト全体の Imports(ItemGroup の <Import Include="...">) */
+  imports: string[];
+  /** 参照(Reference / ProjectReference / PackageReference / COMReference)を表示用に整えたもの */
+  references: string[];
+}
+
 /** parseVbproj の戻り値 */
 export interface VbprojParseResult {
   /** 解析対象 .vbproj の絶対パス */
@@ -83,6 +105,8 @@ export interface VbprojParseResult {
   defaultCompileGlobExpanded: boolean;
   items: ProjectItem[];
   diagnostics: ParseDiagnostic[];
+  /** ビルド環境(XML として読めなかったときは undefined) */
+  environment?: ProjectEnvironment | undefined;
 }
 
 // ---------------------------------------------------------------------------

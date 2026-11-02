@@ -21,6 +21,7 @@ import { resolveWindowsPath } from "./paths.ts";
 import { parseXml } from "./xmlReader.ts";
 import type {
   ParseDiagnostic,
+  ProjectEnvironment,
   ProjectItem,
   ProjectItemKind,
   ProjectStyle,
@@ -404,6 +405,133 @@ function readSdkProperties(
   return result;
 }
 
+/** <environment> に載せるプロパティ(要素名は大文字小文字を区別しない) */
+const ENVIRONMENT_PROPERTIES = {
+  targetframeworkversion: "targetFrameworks",
+  targetframework: "targetFrameworks",
+  targetframeworks: "targetFrameworks",
+  langversion: "langVersions",
+  optionstrict: "optionStrict",
+  optionexplicit: "optionExplicit",
+  optioninfer: "optionInfer",
+  optioncompare: "optionCompare",
+  rootnamespace: "rootNamespaces",
+} as const satisfies Record<string, keyof ProjectEnvironment>;
+
+/** 子要素か属性の値(PackageReference の Version は両方の書き方がある) */
+function childOrAttribute(entry: Record<string, unknown>, name: string): string | undefined {
+  for (const [key, value] of Object.entries(entry)) {
+    const bare = key.startsWith("@_") ? key.slice(2) : key;
+    if (!equalsIgnoreCase(bare, name)) {
+      continue;
+    }
+    const text = asString(value) ?? (isRecord(value) ? asString(value["#text"]) : undefined);
+    if (text !== undefined && text.trim() !== "") {
+      return text.trim();
+    }
+  }
+  return undefined;
+}
+
+/** 参照 1 件を表示用に整える(厳密名のうち名前と版だけを残す。HintPath は載せない) */
+function describeReference(tag: string, entry: unknown): string | undefined {
+  const record = isRecord(entry) ? entry : undefined;
+  const include = (record === undefined ? undefined : asString(record["@_Include"]))?.trim();
+  if (include === undefined || include === "") {
+    return undefined;
+  }
+  if (equalsIgnoreCase(tag, "Reference")) {
+    const [name, ...parts] = include.split(",").map((part) => part.trim());
+    const version = parts.find((part) => /^version\s*=/i.test(part))?.replace(/^version\s*=\s*/i, "");
+    return version === undefined || version === "" ? name : `${name} ${version}`;
+  }
+  if (equalsIgnoreCase(tag, "ProjectReference")) {
+    const name =
+      (record === undefined ? undefined : childOrAttribute(record, "Name")) ??
+      include.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") ??
+      include;
+    return `${name}(プロジェクト参照)`;
+  }
+  if (equalsIgnoreCase(tag, "PackageReference")) {
+    const version = record === undefined ? undefined : childOrAttribute(record, "Version");
+    return version === undefined ? `${include}(NuGet)` : `${include} ${version}(NuGet)`;
+  }
+  return `${include}(COM)`;
+}
+
+/**
+ * ビルド環境を読む(手順文 v10 の <environment>)。言語の版・Option・参照など、AI が使える構文と API を
+ * 決めるのに要る値だけ。Condition は評価せず、値が分かれていれば出現順にすべて残す
+ */
+function readEnvironment(project: Record<string, unknown>): ProjectEnvironment {
+  const environment: ProjectEnvironment = {
+    toolsVersion: asString(project["@_ToolsVersion"])?.trim() || undefined,
+    targetFrameworks: [],
+    langVersions: [],
+    optionStrict: [],
+    optionExplicit: [],
+    optionInfer: [],
+    optionCompare: [],
+    rootNamespaces: [],
+    imports: [],
+    references: [],
+  };
+  const push = (list: string[], value: string): void => {
+    if (!list.some((existing) => equalsIgnoreCase(existing, value))) {
+      list.push(value);
+    }
+  };
+  for (const group of toArray(project["PropertyGroup"])) {
+    if (!isRecord(group)) {
+      continue;
+    }
+    for (const [tag, value] of Object.entries(group)) {
+      const key = ENVIRONMENT_PROPERTIES[tag.toLowerCase() as keyof typeof ENVIRONMENT_PROPERTIES];
+      if (key === undefined) {
+        continue;
+      }
+      for (const element of toArray(value)) {
+        const text = asString(element) ?? (isRecord(element) ? asString(element["#text"]) : undefined);
+        if (text === undefined) {
+          continue;
+        }
+        const values = key === "targetFrameworks" ? text.split(";") : [text];
+        for (const raw of values) {
+          if (raw.trim() !== "") {
+            push(environment[key], raw.trim());
+          }
+        }
+      }
+    }
+  }
+  for (const group of toArray(project["ItemGroup"])) {
+    if (!isRecord(group)) {
+      continue;
+    }
+    for (const [tag, value] of Object.entries(group)) {
+      if (equalsIgnoreCase(tag, "Import")) {
+        for (const entry of toArray(value)) {
+          const include = isRecord(entry) ? asString(entry["@_Include"])?.trim() : undefined;
+          if (include !== undefined && include !== "") {
+            push(environment.imports, include);
+          }
+        }
+        continue;
+      }
+      if (!["Reference", "ProjectReference", "PackageReference", "COMReference"].some((kind) => equalsIgnoreCase(kind, tag))) {
+        continue;
+      }
+      for (const entry of toArray(value)) {
+        const described = describeReference(tag, entry);
+        if (described !== undefined) {
+          push(environment.references, described);
+        }
+      }
+    }
+  }
+  return environment;
+}
+
 /** `<Compile Update="...">` の内容(展開・列挙後の項目へメタデータを付与する) */
 interface UpdateEntry {
   kind: FileItemKind;
@@ -584,6 +712,8 @@ export function parseVbproj(
     });
     return result;
   }
+
+  result.environment = readEnvironment(project);
 
   const toolsVersion = asString(project["@_ToolsVersion"]);
   if (toolsVersion !== undefined) {

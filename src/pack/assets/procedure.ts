@@ -55,11 +55,24 @@
  * (操作と期待する DB の変化を checks/*.verify.md で出させ、ユーザーが ashiato verify で
  * 手順どおりに操作して、照合の結果を貼る)を足す。有効になる条件は v8 と同じ
  * (docs/db/schema.md の有無)。無いときの本文は v8 と同じ(版数の行だけ)。
+ *
+ * v10 (2026-11-02、手順文の見直し 2026-10-26 と コメント方針の試行 2026-10-28):
+ * - 「コード中のコメント」の節を足す(なぜだけを書く、変更の経緯・日付・担当者は changes.md の
+ *   概要へ、古いコードをコメントアウトで残さない、既存の修正履歴のコメントを手本にしない、
+ *   変更する範囲の食い違うコメントは直す)。v9 は「既存コードの流儀に合わせる」だけで、
+ *   レガシーの「2019/09/20 鈴木 MOD START」形式を AI が真似ていた(検証の記録は設計書 §17)
+ * - solution 構成の型の規則を、パックの <environment>(.vbproj から読んだ Visual Basic と
+ *   .NET Framework の版・Option・参照。services/environmentSummary.ts)に従わせる。
+ *   「Option Strict On を前提に」の決め打ちをやめる
+ * - 自己検証の表の「空行・インデント込みで逐語一致か」の列を「呼んでいる既存のメソッド・
+ *   プロパティ・コントロール・列がパック内にあるか」に替える(添付の読み取りでは空行が
+ *   見えず確かめようがない。照合の空白・空行の差は適用ツールが吸収する)。方針の段にも
+ *   同じ確かめを置く(changes.md を出す前に直せるように)。コメントと環境の確認を自己検証に足す
  */
 
 import { PACK_COMMAND, TOOL_NAME } from "../../brand.ts";
 
-export const PROCEDURE_VERSION = 9;
+export const PROCEDURE_VERSION = 10;
 
 /** 構成の種類(設定ファイルの kind と同じ。手順文の表現の切り替えに使う) */
 export const PROCEDURE_LAYOUTS = ["solution", "generic"] as const;
@@ -102,9 +115,17 @@ export const PROCEDURE_TEMPLATE = `<!-- ${TOOL_NAME} procedure v${PROCEDURE_VERS
 ## 判断の原則
 
 - 分からないことは推測で埋めず、質問してください。特に{{LAYOUT:ASK_EXAMPLES}}が読み取れないときは、変更を出さずに質問だけで回答を終えてください
-- 既存コードの流儀(命名・エラー処理・DB アクセスの書き方)に合わせてください。パック内に同種の処理があれば、それを手本にしてください
+- 既存コードの流儀(命名・エラー処理・DB アクセスの書き方)に合わせてください。パック内に同種の処理があれば、それを手本にしてください。ただしコメントは次の「コード中のコメント」に従います
 {{LAYOUT:TYPE_RULE}}
 - 影響範囲は最小にしてください。求められていないリファクタリングはしないでください
+
+## コード中のコメント
+
+- コメントには「なぜそうするか」(業務上の決まり、外部の仕様や制約、回避策の理由)だけを書いてください。コードを読めば分かる「何をしているか」は書かないでください
+- 変更の経緯(追加・修正・削除した旨、日付、担当者、「〜に変更」など)はコードに書かず、changes.md の CHANGES の概要に書いてください。変更の履歴は git に残ります
+- 古いコードをコメントアウトして残さないでください。不要になったコードは削除します
+- 既存コードにある修正履歴のコメント(日付・担当者・START / END の印など)は、書き方の手本にしないでください
+- 今回変更する範囲にあるコメントが、変更後のコードと食い違う、または不要になった場合は、同じ変更で直すか削除してください。変更する範囲の外のコメントには触れないでください
 {{DOCS_SECTIONS}}{{TEST_SECTIONS}}{{DB_SECTIONS}}`;
 
 // ---- 「回答の構成」の部品。モードごとに番号を振って組み立てる ----
@@ -113,20 +134,23 @@ const INVESTIGATE_BODY = `読んだファイルと、関係するシンボル(�
 変更対象の処理がどこから呼ばれ、何を呼ぶかを 1〜3 行で述べてください。`;
 
 const POLICY_BODY_COMMON = `何をどう変えるかを述べてください。検討して採らなかった案があれば理由とともに 1 行で。
-リスク(既存動作への影響、未確認の前提)を挙げてください。`;
+リスク(既存動作への影響、未確認の前提)を挙げてください。
+変更で呼ぶ既存のメソッド・プロパティ・コントロール・列は、パック内で定義を確かめたものだけにしてください。見つからないものは推測で呼ばず、質問してください。`;
 
 const CHANGES_BODY = `<instruction> の規約どおり changes.md を出してください。`;
 
 const VERIFY_HEAD = `changes.md の SEARCH ブロックごとに、次を表で確認してください。
-| ファイル | ブロック | パック内に全文があるか | 空行・インデント込みで逐語一致か | ファイル内で一意か |
+| ファイル | ブロック | パック内に全文があるか | ファイル内で一意か | 呼んでいる既存のメソッド・プロパティ・コントロール・列がパック内にあるか |
 加えて次を確認してください。
-- 同じファイルへの SEARCH ブロック同士が重なっていない`;
+- 同じファイルへの SEARCH ブロック同士が重なっていない
+- 追加・変更したコメントに、変更の経緯(日付・担当者・「追加」「修正」など)やコメントアウトした古いコードが入っていない`;
 
 const VERIFY_TAIL = `問題があれば changes.md を修正してから回答を確定してください。`;
 
-/** 自己検証の確認項目のうち構成の種類で変わる行(solution は v6 と同一) */
+/** 自己検証の確認項目のうち構成の種類で変わる行 */
 const VERIFY_LAYOUT_LINES: Readonly<Record<ProcedureLayout, readonly string[]>> = {
   solution: [
+    "- <environment> の Visual Basic と .NET Framework の版で使えない構文・API を使っていない",
     "- Handles 句のイベント名・コントロール名が <ui_summary> と一致している",
     "- Designer.vb / .resx / Generated / src/generated を変更していない",
     "- 新規ファイルは create で出し、.vbproj を編集していない",
@@ -142,12 +166,13 @@ function verifyBody(layout: ProcedureLayout): string {
   return [VERIFY_HEAD, ...VERIFY_LAYOUT_LINES[layout], VERIFY_TAIL].join("\n");
 }
 
-/** 後方互換: solution 構成の自己検証本文(v6 と同一) */
+/** 後方互換: solution 構成の自己検証本文 */
 const VERIFY_BODY = verifyBody("solution");
 
 /**
  * 構成の種類で差し替える語句・行({{LAYOUT:<名前>}})。行ごと消える項目は
- * 末尾の改行まで含めて置換する(READ_UI_SUMMARY)。solution は v6 の文面そのまま。
+ * 末尾の改行まで含めて置換する(READ_UI_SUMMARY)。solution の TYPE_RULE は v10 で
+ * <environment> を参照する 2 行に変えた(それ以外は v6 の文面そのまま)。
  */
 export const LAYOUT_TEXT: Readonly<Record<ProcedureLayout, Readonly<Record<string, string>>>> = {
   solution: {
@@ -158,7 +183,8 @@ export const LAYOUT_TEXT: Readonly<Record<ProcedureLayout, Readonly<Record<strin
     READ_NEW_FILES:
       "- 新規ファイルは changes.md の create で出してください。.vbproj は編集しないでください(適用ツールが登録します)。パスは <file_summary> に示す物理パスの規則で書いてください",
     ASK_EXAMPLES: "「どのフォームか」「既存のどの処理に合わせるか」「例外時の挙動」",
-    TYPE_RULE: "- Option Strict On を前提に、型変換は明示してください",
+    TYPE_RULE:
+      "- 構文と API は、<environment> に書かれた Visual Basic と .NET Framework の版で使えるものだけにしてください(新しい Visual Studio でビルドしていても、古い構文は通ります)。パック内の既存コードで使われている構文は使って構いません\n- Option Strict が Off のプロジェクトでも、型変換は明示してください",
   },
   generic: {
     NOTE: ", layout: generic",

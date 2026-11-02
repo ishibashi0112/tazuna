@@ -94,6 +94,37 @@ Designer 自動生成コードからの要約(コントロール名: 型 — Tex
 npx tazuna pack MyApp.sln --include-designer-file FormMain.Designer.vb --include-designer-file "FormOrder*"
 ```
 
+## ビルド環境(`<environment>`)
+
+パックには `.vbproj` 本体が入らないため、AI からは Visual Basic の言語の版や
+.NET Framework の版が見えません。Visual Studio 2013 世代(Visual Basic 12.0)のプロジェクトで
+文字列補間 `$"..."`・`NameOf`・`?.` を書かれるとビルドエラーになります。そこで `tazuna pack` は
+`.vbproj` から読んだビルド環境を `<environment>` として `<file_summary>` の直後に入れ、
+本文用テキスト(`.prompt.md`)にも同じものを入れます(v0.16.0〜)。
+
+```xml
+<environment>
+.vbproj から読み取ったビルド環境(静的に読んだ値。Condition は評価せず、構成で値が分かれるときは併記):
+- SalesApp(SalesApp/SalesApp.vbproj)
+  - 形式: 旧スタイル(ToolsVersion 12.0)
+  - Visual Basic: 12.0 まで(LangVersion の指定なし。ToolsVersion 12.0 は Visual Studio 2013 の形式のため、Visual Studio 2013 の既定の Visual Basic 12.0 とみなす)。14.0 以降の文字列補間 $"..."・NameOf・Null 条件演算子 ?.・複数行の文字列リテラル・ReadOnly 自動実装プロパティ、15.0 以降のタプル・2 進数リテラル &B は使えない
+  - .NET Framework: v4.5
+  - Option: Strict Off / Explicit On / Infer On / Compare Binary(ファイル先頭の Option 文があればそちらが優先)
+  - ルート名前空間: SalesApp(ファイルに Namespace を書かなくても、この名前空間に入る)
+  - プロジェクト全体の Imports: Microsoft.VisualBasic, System, System.Collections.Generic, System.Data
+  - 参照: System, System.Data, FarPoint.Win.Spread 8.0.4000.2010, Common(プロジェクト参照)
+</environment>
+```
+
+- 載せるのは ToolsVersion・TargetFrameworkVersion(SDK スタイルは TargetFramework)・LangVersion・
+  Option(Strict / Explicit / Infer / Compare)・RootNamespace・プロジェクト全体の Imports・参照の名前と版です。
+  参照の HintPath(DLL の置き場所)や公開キーは載せません
+- LangVersion の指定が無い旧スタイルのプロジェクトは、ToolsVersion の Visual Studio の既定の版と**みなした**
+  ことを明記して上限を書きます。新しい Visual Studio でビルドしていても古い構文は通るため、低い方に
+  倒して困ることはありません
+- Condition は評価しません。構成(Debug / Release など)で値が分かれるときは併記し、言語の版は低い方に合わせます
+- `kind: "generic"` の構成では出ません(`.vbproj` を読まないため)
+
 ## 初回セットアップ(`tazuna init`)
 
 リポジトリの直下(`.git` のある場所)で一度だけ実行します。
@@ -477,6 +508,13 @@ M365 Copilot のように思考量を外から制御できないチャットで�
 npx tazuna pack --task "受注フォームに保存ボタンを追加する"   # 依頼内容を <task> に同梱
 npx tazuna pack --task task.md                                # ファイルなら読み込む
 ```
+
+手順文には「コード中のコメント」の決まりも入っています(手順文 v10、v0.16.0〜)。コメントには
+「なぜそうするか」だけを書き、変更の経緯(日付・担当者・「追加」「修正」・MOD START / END の印など)は
+コードに書かず changes.md の概要に書く、古いコードをコメントアウトして残さない、変更する範囲で
+食い違ったコメントは同じ変更で直す、という内容です。既存コードの修正履歴のコメントは手本にしません。
+社内の規約で修正履歴のコメントが必須のプロジェクトでは、下記の `procedure.md` で
+この節を書き換えてください。
 
 ### モード(`--mode`)
 

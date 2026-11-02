@@ -556,6 +556,7 @@ export function packCommand(argv: string[]): number {
     plan,
     procedure,
     instruction,
+    ...(output.environmentBlock === undefined ? {} : { environment: output.environmentBlock }),
     ...(docsTail === undefined ? {} : { docs: docsTail }),
     ...(dbSchema === undefined
       ? {}

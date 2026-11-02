@@ -128,6 +128,15 @@ slnmix 0.22.2 の `src/` を `src/pack/`、テストを `tests/pack/`、test-fix
   (docs/ 連携。設計書 1 行目の状態行 `<!-- slnmix design: status=... -->` だけを読む。§18) /
   `services/designerSummary.ts` (UI サマリー。実データで取りこぼしが見つかったらパターンを拡充する。完全な VB 構文解析は
   しない) / `services/contractSummary.ts` (`<contract_summary>`) / `services/repomixExporter.ts` (出力の組み立て)
+- ビルド環境 `<environment>` (手順文 v10、v0.16.0): `vbprojParser.ts` の `readEnvironment` が .vbproj から ToolsVersion・
+  TargetFrameworkVersion / TargetFramework(s)・LangVersion・Option 4 種・RootNamespace・ItemGroup の Import・参照
+  (名前と版。HintPath・公開キーは載せない) を静的に読み (Condition は評価せず値を出現順に併記)、
+  `services/environmentSummary.ts` が `<file_summary>` の直後のブロックにする (solution 構成のみ。本文用テキストにも入れる)。
+  LangVersion の無い旧スタイルは ToolsVersion の Visual Studio の既定の Visual Basic の版と「みなす」と明記して上限を書く
+  (推測したことを宣言する)。手順文 solution の型の規則はこのブロックの版に従わせる (「Option Strict On を前提に」の決め打ちは廃止)
+- 手順文 v10 の「コード中のコメント」(なぜだけ・経緯は changes.md の概要へ・コメントアウトで残さない・既存の修正履歴を
+  手本にしない・変更範囲の食い違うコメントは直す) は、AI 役での v9 / v10 比較 (設計書 §17 の 2026-11-02) を根拠に入れた。
+  修正履歴のコメントが社内規約で必須のプロジェクトは procedure.md で書き換える (PACK.md に案内)
 - M365 Copilot Chat の実測 (2026-09-12、設計書 §15.1): 添付ファイル内の指示は「埋め込み指示」として無視され、
   添付の読み取りでは空行・行末空白が落ちる。貼付は約 120K 文字が上限。よって手順文・規約文は本文用テキスト
   (`<出力名>.prompt.md`) で渡す前提 (パック内の埋め込みは貼付運用向けに残す)
@@ -494,9 +503,9 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   v0.14.0: 2026-10-31 伏せ字 [MASKED] の扱い — 失敗レポートの抜粋を伏せる + 伏せ字の行の照合と元の値への復元 /
   v0.15.0: 2026-11-01 slnmix の統合 (pack / build / init の一本化・規約文の内蔵・設定ファイル名とルートの統一) +
   言語汎用化 (git の一覧・言語ごとの伏せ方) + **tazuna への改名** (npm のパッケージ名も tazuna。petari 0.15.0 は
-  `compat/petari/` の互換パッケージ)。**未公開** (公開は利用者。順序: GitHub のリポジトリ名を tazuna に変更 →
-  tazuna 0.15.0 を公開 → `npm pack tazuna@0.15.0` で `dist/pack/` の有無とファイル数を確かめる → `compat/petari/` で
-  petari 0.15.0 を公開 → slnmix 0.23.0 (互換パッケージ) を公開))。
+  `compat/petari/` の互換パッケージ)。2026-11-02 公開 (tazuna 0.15.0 → petari 0.15.0 → slnmix 0.23.0 の順。petari と slnmix は同日に `npm deprecate`) /
+  v0.16.0: 2026-11-02 手順文 v10 (コード中のコメントの方針・自己検証の表の列の差し替え) + パックの `<environment>`
+  (.vbproj のビルド環境)。**未公開** (公開は利用者)。
   リポジトリ: https://github.com/ishibashi0112/tazuna (旧 https://github.com/ishibashi0112/petari。GitHub が転送する)
   リリース手順: version を上げて `pnpm publish` (`prepublishOnly` が typecheck → test → build を実行。認証はユーザー)
 - **publish 事故と再発防止 (2026-09-14)**: v0.9.0 は `package.json` の version だけ 0.9.0 で、
