@@ -36,6 +36,7 @@ describe("compat/petari: planForward", () => {
   it("パッケージは tazuna だけに依存し、bin は petari", () => {
     const pkg = JSON.parse(readFileSync(join(COMPAT_DIR, "package.json"), "utf8")) as {
       name: string;
+      version: string;
       bin: Record<string, string>;
       dependencies: Record<string, string>;
       files: string[];
@@ -47,7 +48,9 @@ describe("compat/petari: planForward", () => {
     expect(pkg.name).toBe("petari");
     expect(pkg.bin).toEqual({ petari: "./cli.js" });
     expect(Object.keys(pkg.dependencies)).toEqual([own.name]);
-    expect(pkg.dependencies[own.name]).toBe(`^${own.version}`);
+    // petari は 0.15.0 で凍結した(2026-11-02 に npm deprecate)。tazuna の版を上げても公開し直さないため、
+    // 依存は公開した版(自分の版と同じ範囲)のまま
+    expect(pkg.dependencies[own.name]).toBe(`^${pkg.version}`);
     expect(pkg.files).toEqual(["cli.js", "forward.js"]);
   });
 });

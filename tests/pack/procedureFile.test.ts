@@ -369,6 +369,31 @@ suite("procedureFile: buildPromptText(チャット本文に貼る指示テキス
   });
 });
 
+suite("procedureFile: <environment>(手順文 v10)", () => {
+  const ENVIRONMENT = "<environment>\n.vbproj から読み取ったビルド環境:\n- App(App/App.vbproj)\n</environment>";
+
+  test("本文用テキストの先頭段落の後に <environment> を載せ、添付にもあると書く", () => {
+    const prompt = buildPromptText(
+      tail({ instruction: INSTRUCTION_FOUND, environment: ENVIRONMENT }),
+      "repomix-output.xml",
+    );
+    assert.ok(prompt !== undefined);
+    assert.ok(prompt.includes("続く <environment> は .vbproj から読み取ったビルド環境です(添付にも同じものがあります)。\n"));
+    assert.ok(prompt.includes(`\n\n${ENVIRONMENT}\n\n<instruction>\n`));
+    assert.ok(prompt.indexOf("[添付ファイルと本文の関係]") < prompt.indexOf("<environment>"));
+  });
+
+  test("environment が無ければ従来どおり(v9 と同じ本文用テキスト)", () => {
+    const prompt = buildPromptText(tail({ instruction: INSTRUCTION_FOUND }), "repomix-output.xml");
+    assert.ok(prompt !== undefined && !prompt.includes("environment"));
+  });
+
+  test("パック本文の末尾には足さない(<file_summary> の直後に出力側で入れるため)", () => {
+    const packed = assembleOutput("本文\n", tail({ instruction: INSTRUCTION_FOUND, environment: ENVIRONMENT }));
+    assert.ok(!packed.includes("<environment>"));
+  });
+});
+
 suite("procedureFile: docs/ 連携(フェーズ 6)", () => {
   const DRAFT = "<!-- slnmix design: status=draft blocking=1 deferred=0 -->\n# 設計書\n";
   function docsTail(files: Record<string, string>, explicitMode?: "full" | "design"): DocsTail {

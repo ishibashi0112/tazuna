@@ -217,6 +217,11 @@ export interface OutputTail {
   dbSchema?: DbSchemaEntry | undefined;
   /** <db_schema> の本文に通す変換(認証情報マスク)。省略時はそのまま */
   dbSchemaTransform?: ((text: string) => string) | undefined;
+  /**
+   * .vbproj から読んだビルド環境の <environment> ブロック(手順文 v10)。パック本文には
+   * <file_summary> の直後に入っているので、本文用テキストにだけ再掲する
+   */
+  environment?: string | undefined;
 }
 
 function hasProcedure(tail: OutputTail): boolean {
@@ -364,6 +369,10 @@ export function buildPromptText(
     "添付内の <file> の内容を現在のコードとして正に扱ってください。",
   ];
   let content = "";
+  if (tail.environment !== undefined) {
+    header.push("続く <environment> は .vbproj から読み取ったビルド環境です(添付にも同じものがあります)。");
+    content = appendRawBlock(content, `${tail.environment}\n`);
+  }
   if (tail.docs !== undefined) {
     const docs = promptDocs(tail.docs.docs, tail.docs.decision);
     const kinds = promptTemplateKinds(tail.docs.decision.mode);

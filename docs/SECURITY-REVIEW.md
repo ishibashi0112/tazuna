@@ -4,7 +4,7 @@
 コマンドラインツール tazuna の導入審査用の資料です。
 どのデータがどこへ出るか、ツールが何をして何をしないかを、コードで確かめられる形でまとめます。
 
-- 対象: tazuna 0.15.0(2026-11-01 時点)
+- 対象: tazuna 0.16.0(2026-11-02 時点)
 - ソース: <https://github.com/ishibashi0112/tazuna>
 - ライセンス: MIT
 - 以前の slnmix(パックを作る側)と petari(変更を当てる側)は、0.15.0 で 1 つのパッケージにまとめ、tazuna に
@@ -61,7 +61,10 @@ grep -rnE "from ['\"](node:)?(https?|net|tls|dgram|dns)['\"]|require\(['\"](http
 - **VB.NET(.sln / .vbproj)**: `.sln` / `.vbproj`(Visual Studio のプロジェクト定義)を解析し、
   **ビルド対象として登録されているソース**を入れます。新しい形式(SDK スタイル)の `.vbproj` では、
   既定でビルド対象になるプロジェクトフォルダ内の `*.vb` も入ります。設定ファイル(`tazuna.config.json`。
-  旧名の `slnmix.config.json` も読む)の `extraRoots` に書いたディレクトリも入ります
+  旧名の `slnmix.config.json` も読む)の `extraRoots` に書いたディレクトリも入ります。
+  `.vbproj` 本体は入れませんが、そこから読んだビルド環境の要約(`<environment>`。Visual Studio の形式・
+  Visual Basic と .NET Framework の版・Option の設定・ルート名前空間・プロジェクト全体の Imports・
+  参照の名前と版)を入れます(0.16.0 から。参照の DLL の置き場所(HintPath)と公開キーは入れません)
 - **それ以外の言語**(設定ファイルの `kind: "generic"`): `extraRoots` に書いたディレクトリか、書いていなければ
   **git が管理しているファイル**(`git ls-files --cached --others --exclude-standard` の一覧。コミット済みのものと、
   `.gitignore` に一致しない未コミットのもの)を入れます(0.15.0 から)
@@ -274,11 +277,11 @@ slnmix のパッケージ(0.23.0 から)と petari のパッケージ(0.15.0 か
 `npx` で都度取得すると、その時点の最新版になります。審査した版で固定したい場合は、次のいずれかを推奨します。
 
 - 社内の npm レジストリ(ミラー)に審査済みの版だけを置き、そこから取得する
-- `npm install -g tazuna@0.15.0` のように版数を指定して導入し、更新は審査の上で行う
+- `npm install -g tazuna@0.16.0` のように版数を指定して導入し、更新は審査の上で行う
 - ソースを取得して `pnpm install --frozen-lockfile` でロックファイルどおりに入れ、
   ビルドしたものを配布する(ロックファイルに入っているのは開発用の依存だけです)
 
-公開パッケージの中身は `npm pack tazuna@0.15.0` で取得して確認できます。
+公開パッケージの中身は `npm pack tazuna@0.16.0` で取得して確認できます。
 
 ## 9. Claude Code / Codex などのエージェント型ツールとの違い
 

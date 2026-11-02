@@ -836,3 +836,39 @@ suite("repomixExporter: generic 構成(layout: generic、hybrid fixture の web 
     assert.ok(base.content.includes("Designer 関連ファイルの原文は含まれない"));
   });
 });
+
+suite("repomixExporter: <environment>(手順文 v10)", () => {
+  test("論理構成では <file_summary> の直後に .vbproj のビルド環境を入れ、結果にも同じブロックを返す", () => {
+    const sources: RepomixSource[] = [{ label: "Basic", parseResult: parseBasic() }];
+    const result = buildRepomixOutput("Basic.vbproj", sources, fakeDeps, {
+      includeSensitive: false,
+      maskCredentials: false,
+      rootDir: FIXTURES_ROOT,
+    });
+    assert.ok(result.environmentBlock !== undefined);
+    assert.ok(result.content.includes(`</file_summary>\n\n${result.environmentBlock}\n\n<directory_structure>`));
+    assert.ok(result.environmentBlock.includes("- Basic(basic/Basic.vbproj)"));
+    assert.ok(result.environmentBlock.includes("  - 形式: 旧スタイル(ToolsVersion 12.0)"));
+    assert.ok(result.environmentBlock.includes("Visual Studio 2013 の既定の Visual Basic 12.0 とみなす"));
+    assert.ok(result.environmentBlock.includes("  - ルート名前空間: Basic("));
+    assert.ok(result.environmentBlock.includes("  - 参照: System, System.Windows.Forms"));
+  });
+
+  test("ルートが無い(--legacy-paths)ときはファイル名で示す", () => {
+    const sources: RepomixSource[] = [{ label: "Basic", parseResult: parseBasic() }];
+    const result = buildRepomixOutput("Basic.vbproj", sources, fakeDeps, { includeSensitive: false, maskCredentials: false });
+    assert.ok(result.environmentBlock?.includes("- Basic(Basic.vbproj)"));
+  });
+
+  test("generic 構成では入れない", () => {
+    const result = buildRepomixOutput("hybrid", [], realDeps, {
+      includeSensitive: false,
+      maskCredentials: false,
+      rootDir: path.join(FIXTURES_ROOT, "hybrid"),
+      extraRoots: [{ path: "apps/web", kind: "src", include: ["**/*.ts"], exclude: [] }],
+      layout: "generic",
+    });
+    assert.strictEqual(result.environmentBlock, undefined);
+    assert.ok(!result.content.includes("<environment>"));
+  });
+});

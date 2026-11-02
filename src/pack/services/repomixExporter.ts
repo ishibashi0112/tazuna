@@ -30,6 +30,7 @@ import type {
 } from "../types.ts";
 import { isBinaryExtension } from "./binaryExtensions.ts";
 import { summarizeContractSchema } from "./contractSummary.ts";
+import { renderEnvironmentBlock } from "./environmentSummary.ts";
 import { decodeShiftJis } from "../../core/encoding.ts";
 import { type MaskFinding, maskCredentials } from "../../core/mask.ts";
 import { sourceLanguageOf } from "../../core/source-lexer.ts";
@@ -153,6 +154,11 @@ export interface RepomixExportResult {
   diagnostics: ParseDiagnostic[];
   /** 出力した <file> の path 属性(出力順。自動テストの有無の判定に使う) */
   filePaths: string[];
+  /**
+   * .vbproj から読んだビルド環境の <environment> ブロック(論理構成のときだけ。手順文 v10)。
+   * パックの <file_summary> の直後に入れたものと同じ。本文用テキストにも載せる
+   */
+  environmentBlock?: string | undefined;
 }
 
 /**
@@ -784,6 +790,18 @@ export function buildRepomixOutput(
 
   const generic = options.layout === "generic";
   const configFileName = options.configFileName ?? CONFIG_FILE_NAME;
+  const environmentBlock = generic
+    ? undefined
+    : renderEnvironmentBlock(
+        sources.map((source) => ({
+          label: source.label,
+          projectPath:
+            (rootDir === undefined ? undefined : relativeWithinRoot(rootDir, source.parseResult.projectPath)) ??
+            path.basename(source.parseResult.projectPath),
+          style: source.parseResult.projectStyle,
+          environment: source.parseResult.environment,
+        })),
+      );
 
   const content = [
     generic && gitFiles !== undefined
@@ -878,6 +896,7 @@ export function buildRepomixOutput(
     "</notes>",
     "</file_summary>",
     "",
+    ...(environmentBlock === undefined ? [] : [environmentBlock, ""]),
     "<directory_structure>",
     treeLines.join("\n"),
     "</directory_structure>",
@@ -908,5 +927,6 @@ export function buildRepomixOutput(
     contractSummaryIncluded: contractPlaced,
     diagnostics,
     filePaths,
+    environmentBlock,
   };
 }
