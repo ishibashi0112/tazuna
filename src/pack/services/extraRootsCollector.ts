@@ -45,6 +45,16 @@ export interface ExtraRootsResult {
   files: ExtraRootFile[];
   skipped: ExtraRootSkipped[];
   diagnostics: ParseDiagnostic[];
+  /** git の一覧を設定の include / exclude で絞ったときの件数(collectGitFiles のみ) */
+  filtered?: GitFilesFiltered | undefined;
+}
+
+export interface GitFilesFiltered {
+  /** include に一致しなかった件数と、その拡張子(拡張子の無いものはファイル名)ごとの件数(多い順) */
+  notIncluded: number;
+  notIncludedByLabel: Array<{ label: string; count: number }>;
+  /** exclude に一致した件数 */
+  excluded: number;
 }
 
 /** include に関わらず常に除外するパターン(追加ルートのディレクトリ基準) */
@@ -189,10 +199,16 @@ export function collectGitFiles(
   rootDir: string,
   relativePaths: readonly string[],
   deps: GitFilesDeps,
+  filters: { include?: readonly string[] | undefined; exclude?: readonly string[] | undefined } = {},
 ): ExtraRootsResult {
   const files: ExtraRootFile[] = [];
   const skipped: ExtraRootSkipped[] = [];
   let alwaysExcludedCount = 0;
+  const includeRegExps = filters.include?.map(globToRegExp);
+  const excludeRegExps = (filters.exclude ?? []).map(globToRegExp);
+  const notIncluded = new Map<string, number>();
+  let notIncludedCount = 0;
+  let excludedCount = 0;
   for (const raw of relativePaths) {
     const relativePath = normalizeGlobPath(raw);
     if (relativePath === "" || relativePath.startsWith("../") || relativePath.startsWith("/")) {
@@ -222,6 +238,19 @@ export function collectGitFiles(
       skipped.push({ relativePath, reason: `.gitignore により除外(${ignoreSource})` });
       continue;
     }
+    // 設定の include / exclude(tazuna init が拡張子から書く)。数が多くなり得るので 1 件ずつは
+    // <skipped_files> に載せず、件数と拡張子ごとの内訳を残す(バイナリ・ロックファイルなど、
+    // 設定によらず入らないものは上で理由を残す)
+    if (includeRegExps !== undefined && !includeRegExps.some((re) => re.test(relativePath))) {
+      notIncludedCount += 1;
+      const label = labelOf(relativePath);
+      notIncluded.set(label, (notIncluded.get(label) ?? 0) + 1);
+      continue;
+    }
+    if (excludeRegExps.some((re) => re.test(relativePath))) {
+      excludedCount += 1;
+      continue;
+    }
     const size = deps.fileSize(absolutePath);
     if (size === undefined) {
       skipped.push({ relativePath, reason: "通常のファイルではない(削除済み・サブモジュールなど)" });
@@ -237,14 +266,43 @@ export function collectGitFiles(
     files.push({ kind: GIT_FILES_KIND, rootPath: "", relativePath, absolutePath });
   }
   files.sort((a, b) => a.relativePath.toLowerCase().localeCompare(b.relativePath.toLowerCase()));
+  const filtered: GitFilesFiltered | undefined =
+    includeRegExps === undefined && excludeRegExps.length === 0
+      ? undefined
+      : {
+          notIncluded: notIncludedCount,
+          notIncludedByLabel: [...notIncluded.entries()]
+            .map(([label, count]) => ({ label, count }))
+            .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)),
+          excluded: excludedCount,
+        };
+  const filterParts =
+    filtered === undefined
+      ? []
+      : [
+          ...(includeRegExps === undefined ? [] : [`include に一致しない ${filtered.notIncluded} 件`]),
+          ...(excludeRegExps.length === 0 ? [] : [`exclude に一致 ${filtered.excluded} 件`]),
+        ];
   return {
     files,
     skipped,
     diagnostics: [
       {
         severity: "info",
-        message: `git が管理しているファイル: ${files.length} 件(既定の除外 ${alwaysExcludedCount} 件、その他の除外 ${skipped.length} 件)`,
+        message: `git が管理しているファイル: ${files.length} 件(${[
+          `既定の除外 ${alwaysExcludedCount} 件`,
+          ...filterParts,
+          `その他の除外 ${skipped.length} 件`,
+        ].join("、")})`,
       },
     ],
+    filtered,
   };
+}
+
+/** 拡張子(小文字。ドット付き)。拡張子の無いもの・ドットで始まる名前はファイル名 */
+function labelOf(relativePath: string): string {
+  const name = path.posix.basename(relativePath);
+  const ext = path.posix.extname(name);
+  return ext === "" || ext === name ? name : ext.toLowerCase();
 }

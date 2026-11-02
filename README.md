@@ -17,7 +17,8 @@ tazuna では AI はあなたの PC に一切触れません。コードを渡�
 
 レガシー VB.NET (`.sln` / `.vbproj`、Shift_JIS) を出発点にしていますが、C# の `.csproj` も同じように
 `.sln` の構成で扱えます (0.17.0。旧スタイル / SDK スタイル、WinForms の Designer.cs の要約)。TypeScript・Python・
-Go などのプロジェクトでも使えます (git が管理しているファイルをまとめる)。実行時依存はゼロで、通信もしません
+Go・Java・PHP などのプロジェクトでも使えます (git が管理しているファイルをまとめる。`tazuna init` が拡張子を見て
+入れる種類を設定に書き、vendor・生成コード・鍵・データのファイルは入れない。0.18.0)。実行時依存はゼロで、通信もしません
 (導入審査向けの説明は [docs/SECURITY-REVIEW.md](docs/SECURITY-REVIEW.md))。
 
 0.15.0 で、変更を当てる側だった petari と、パックを作る側だった [slnmix](https://www.npmjs.com/package/slnmix) を

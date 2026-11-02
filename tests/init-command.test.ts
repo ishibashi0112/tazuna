@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,6 +45,28 @@ describe("initCommand (§4.6、設計書 §25 の一本化)", () => {
       "repomix-output.xml\nrepomix-output.prompt.md\n.tazuna/\n",
     );
   });
+
+  it.skipIf(spawnSync("git", ["--version"]).status !== 0)(
+    ".sln の無い git のリポジトリでは、git が管理しているファイルの拡張子を見て include / exclude を書く (0.18.0)",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "tazuna-init-py-"));
+      spawnSync("git", ["init", "-q", "."], { cwd: dir });
+      mkdirSync(join(dir, "app"));
+      writeFileSync(join(dir, "app", "main.py"), "print(1)\n", "utf8");
+      mkdirSync(join(dir, "vendor", "lib"), { recursive: true });
+      writeFileSync(join(dir, "vendor", "lib", "dep.py"), "x = 1\n", "utf8");
+      writeFileSync(join(dir, "users.csv"), "id,email\n", "utf8");
+      expect(await initCommand(["--root", dir])).toBe(0);
+      const config = JSON.parse(readFileSync(join(dir, "tazuna.config.json"), "utf8")) as Record<string, unknown>;
+      expect(config["include"]).toEqual(["**/*.py", "**/*.md", "**/.gitignore", "tazuna.config.json"]);
+      expect(config["exclude"]).toEqual(["vendor/**"]);
+      expect(config["docs"]).toBeDefined();
+      // 2 回目は変えない (冪等)
+      const first = readFileSync(join(dir, "tazuna.config.json"), "utf8");
+      expect(await initCommand(["--root", dir])).toBe(0);
+      expect(readFileSync(join(dir, "tazuna.config.json"), "utf8")).toBe(first);
+    },
+  );
 
   // 旧 slnmix init が --yes --no-repomix で呼ぶ。受け付けて無視する
   it("--yes / --no-repomix は受け付けて無視する", async () => {

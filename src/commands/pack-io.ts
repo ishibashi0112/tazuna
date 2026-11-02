@@ -5,7 +5,10 @@
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { LEGACY_STATE_DIRECTORY, STATE_DIRECTORY } from "../brand.ts";
 import { decodeSourceBuffer } from "../pack/services/repomixExporter.ts";
+import { collectGitFiles } from "../pack/services/extraRootsCollector.ts";
+import type { PlannerFile } from "../pack/includePlanner.ts";
 import { GitignoreEvaluator } from "../pack/services/gitignoreService.ts";
 import { configFileNameIn, loadSlnmixConfig, readConfigFile, describeConfigConflict } from "../pack/slnmixConfig.ts";
 import { describeRootReason, resolveRoot } from "../pack/rootResolver.ts";
@@ -93,6 +96,118 @@ export function listGitFiles(rootDir: string): { ok: true; files: string[] } | {
   // 競合中のファイルは段ごとに並ぶので重ねない
   const files = [...new Set(result.stdout.toString("utf8").split("\0").filter((p) => p !== ""))];
   return { ok: true, files };
+}
+
+/**
+ * git の一覧から、パック自身の出力(ownOutputs。絶対パス)と、適用の履歴・PC ごとの設定(.tazuna/・
+ * 旧版の .petari/)を除く(.gitignore に書いていなくても。履歴は書き換え前後のファイルの写しと
+ * changes.md なので、入れると同じコードが重複する)
+ */
+export function withoutOwnFiles(rootDir: string, files: readonly string[], ownOutputs: readonly string[]): string[] {
+  const own = new Set(ownOutputs.map((p) => path.relative(rootDir, p).split(path.sep).join("/").toLowerCase()));
+  const stateDirectories = [STATE_DIRECTORY, LEGACY_STATE_DIRECTORY].map((d) => `${d.toLowerCase()}/`);
+  return files.filter((file) => {
+    const lower = file.toLowerCase();
+    return !own.has(lower) && !stateDirectories.some((d) => lower.startsWith(d));
+  });
+}
+
+/**
+ * init が include を決めるための、git が管理しているファイル(パックと同じ既定の除外を済ませたもの。
+ * 既定の出力名・.gitignore / .repomixignore・バイナリの拡張子・ロックファイル・大きいもの)。
+ * git のリポジトリでない・一覧できなければ undefined
+ */
+export function listPackableGitFiles(rootDir: string, ownOutputs: readonly string[]): PlannerFile[] | undefined {
+  const listed = listGitFiles(rootDir);
+  if (!listed.ok) {
+    return undefined;
+  }
+  const gitignore = createGitignoreEvaluator(rootDir);
+  const collected = collectGitFiles(rootDir, withoutOwnFiles(rootDir, listed.files, ownOutputs), {
+    fileSize: fileSizeOf,
+    ignoreReasonFor: (absolutePath) => gitignore.ignoreReasonFor(absolutePath),
+  });
+  return collected.files.map((file) => ({
+    relativePath: file.relativePath,
+    size: fileSizeOf(file.absolutePath) ?? 0,
+  }));
+}
+
+/** init の走査で中に入らないディレクトリ(パックの既定の除外にあるもの) */
+const ALWAYS_SKIPPED_DIRECTORIES = new Set(["node_modules", "dist", "build", "__pycache__"]);
+/** 中に入らず、パックでも外すよう exclude に書くディレクトリ(ビルドの出力) */
+const BUILD_OUTPUT_DIRECTORIES = new Set(["bin", "obj", "target"]);
+
+export interface DirectoryFiles {
+  /** ディレクトリからの相対パス(`/` 区切り) */
+  files: PlannerFile[];
+  /** 中に入らなかったディレクトリのうち、パックの走査では入るもの(exclude に書く) */
+  skippedDirs: Array<{ relativePath: string; reason: string }>;
+}
+
+/**
+ * git の外での init 用: ディレクトリの中のファイル(再帰)。ドットで始まるディレクトリ・Python の仮想環境
+ * (pyvenv.cfg のあるもの)・ビルドの出力(bin / obj / target)・node_modules などには入らない。
+ * シンボリックリンクは辿らない。読めなければ undefined
+ */
+export function listDirectoryFilesForInit(absoluteDir: string): DirectoryFiles | undefined {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(absoluteDir, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+  const result: DirectoryFiles = { files: [], skippedDirs: [] };
+  const walk = (dir: string, relative: string, dirEntries: fs.Dirent[]): void => {
+    for (const entry of dirEntries) {
+      const full = path.join(dir, entry.name);
+      const rel = relative === "" ? entry.name : `${relative}/${entry.name}`;
+      if (entry.isDirectory()) {
+        const lower = entry.name.toLowerCase();
+        if (ALWAYS_SKIPPED_DIRECTORIES.has(lower)) {
+          continue;
+        }
+        if (fs.existsSync(path.join(full, "pyvenv.cfg"))) {
+          result.skippedDirs.push({ relativePath: rel, reason: "Python の仮想環境" });
+          continue;
+        }
+        if (entry.name.startsWith(".")) {
+          result.skippedDirs.push({ relativePath: rel, reason: "ドットで始まるディレクトリ(ツールの設定・キャッシュなど)" });
+          continue;
+        }
+        if (BUILD_OUTPUT_DIRECTORIES.has(lower)) {
+          result.skippedDirs.push({ relativePath: rel, reason: "ビルドの出力" });
+          continue;
+        }
+        try {
+          walk(full, rel, fs.readdirSync(full, { withFileTypes: true }));
+        } catch {
+          // 読めないディレクトリは飛ばす
+        }
+      } else if (entry.isFile()) {
+        result.files.push({ relativePath: rel, size: fileSizeOf(full) ?? 0 });
+      }
+    }
+  };
+  walk(absoluteDir, "", entries);
+  return result;
+}
+
+/** ファイルの先頭(4KB)を文字コード自動判定で読む。読めなければ undefined */
+export function readFileHead(absolutePath: string): string | undefined {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(absolutePath, "r");
+    const buffer = Buffer.alloc(4096);
+    const length = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    return decodeSourceBuffer(buffer.subarray(0, length));
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      fs.closeSync(fd);
+    }
+  }
 }
 
 export function listDirectoryNames(absolutePath: string): string[] | undefined {

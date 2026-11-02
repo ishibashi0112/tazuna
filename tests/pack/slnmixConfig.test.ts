@@ -27,6 +27,7 @@ suite("slnmixConfig: 設定なし", () => {
     assert.deepStrictEqual(result.config, {
       kind: "solution",
       extraRoots: [],
+      exclude: [],
       generatedDirs: [],
       sources: [],
       contractSchema: undefined,
@@ -346,5 +347,57 @@ suite("slnmixConfig: kind(generic 構成。v0.17.0)", () => {
     assert.deepStrictEqual(defaultIncludeFor("src"), [
       "**/*.{ts,tsx,js,jsx,mjs,cjs,css,scss,json,html,md}",
     ]);
+  });
+});
+
+suite("slnmixConfig: include / exclude(git が管理しているファイルの絞り込み。v0.18.0)", () => {
+  test("generic で extraRoots が無ければ使う(区切りをそろえ、空の要素は落とす)", () => {
+    const result = loadSlnmixConfig(
+      ROOT,
+      fakeDeps({
+        "tazuna.config.json": JSON.stringify({
+          kind: "generic",
+          include: ["**/*.py", " ./src\\**/*.ts ", ""],
+          exclude: ["vendor/**"],
+        }),
+      }),
+    );
+    assert.deepStrictEqual(result.config.include, ["**/*.py", "src/**/*.ts"]);
+    assert.deepStrictEqual(result.config.exclude, ["vendor/**"]);
+    assert.deepStrictEqual(result.diagnostics, []);
+  });
+
+  test("空の include は指定なし(すべて)とみなす", () => {
+    const result = loadSlnmixConfig(ROOT, fakeDeps({ "tazuna.config.json": '{ "kind": "generic", "include": [] }' }));
+    assert.strictEqual(result.config.include, undefined);
+    assert.deepStrictEqual(result.config.exclude, []);
+  });
+
+  test("extraRoots があるとき・solution のときは警告して使わない", () => {
+    const withRoots = loadSlnmixConfig(
+      ROOT,
+      fakeDeps({
+        "tazuna.config.json": JSON.stringify({
+          kind: "generic",
+          extraRoots: [{ path: "src", kind: "src" }],
+          include: ["**/*.py"],
+        }),
+      }),
+    );
+    assert.strictEqual(withRoots.config.include, undefined);
+    assert.ok(withRoots.diagnostics.some((d) => d.severity === "warning" && d.message.includes("各要素の include / exclude")));
+    const solution = loadSlnmixConfig(ROOT, fakeDeps({ "tazuna.config.json": '{ "exclude": ["x/**"] }' }));
+    assert.deepStrictEqual(solution.config.exclude, []);
+    assert.ok(solution.diagnostics.some((d) => d.message.includes('kind: "generic" のときだけ')));
+  });
+
+  test("文字列の配列でなければ警告して無視する", () => {
+    const result = loadSlnmixConfig(
+      ROOT,
+      fakeDeps({ "tazuna.config.json": '{ "kind": "generic", "include": "**/*.py", "exclude": [1] }' }),
+    );
+    assert.strictEqual(result.config.include, undefined);
+    assert.deepStrictEqual(result.config.exclude, []);
+    assert.strictEqual(result.diagnostics.filter((d) => d.message.includes("文字列の配列")).length, 2);
   });
 });

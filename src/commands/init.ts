@@ -7,15 +7,19 @@
  * --yes / --no-repomix は受け付けて無視する (旧 slnmix init が `--yes --no-repomix` で呼んでいたため)。
  */
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { parseArgs } from "node:util";
-import { initProject } from "../pack/initProject.ts";
+import { GENERATED_OUTPUTS, initProject } from "../pack/initProject.ts";
 import { findProjectRoot } from "../infra/root.ts";
 import { err, out } from "../infra/term.ts";
 import {
   FS_DEPS,
   isDirectoryPath,
   isFilePath,
+  listDirectoryFilesForInit,
   listDirectoryNames,
+  listPackableGitFiles,
+  readFileHead,
   readSourceTextFile,
 } from "./pack-io.ts";
 
@@ -36,6 +40,13 @@ export async function initCommand(argv: string[]): Promise<number> {
     exists: (p) => fs.existsSync(p),
     listFileNames: FS_DEPS.listFileNames,
     listDirectoryNames,
+    listPackableGitFiles: (rootDir) =>
+      listPackableGitFiles(
+        rootDir,
+        GENERATED_OUTPUTS.map((name) => path.join(rootDir, name)),
+      ),
+    listDirectoryFiles: listDirectoryFilesForInit,
+    readHead: readFileHead,
     readTextFile: readSourceTextFile,
     writeTextFile: (p, content) => fs.writeFileSync(p, content, "utf8"),
     appendTextFile: (p, content) => fs.appendFileSync(p, content, "utf8"),

@@ -23,7 +23,15 @@
 
 import * as path from "node:path";
 import { GitignoreRules } from "./services/gitignoreMatcher.ts";
-import { initConfig, type InitConfigDeps } from "./initConfig.ts";
+import {
+  describeIncludePlan,
+  describePackSize,
+  initConfig,
+  type InitConfigDeps,
+  type InitConfigResult,
+  type InitConfigRoot,
+} from "./initConfig.ts";
+import { PACK_OVERHEAD_CHARS, PASTE_LIMIT_CHARS } from "./handoff.ts";
 import { initDocs, type InitDocsDeps } from "./initDocs.ts";
 import { BUILD_COMMAND, PACK_COMMAND, TOOL_NAME, stateDirectoryName } from "../brand.ts";
 import { CONFIG_TEMPLATE } from "../infra/config.ts";
@@ -228,26 +236,62 @@ function setUpLayout(rootDir: string, deps: InitProjectDeps): LayoutStep {
   if (result.kind === "kept") {
     return { kind: "ok", layout: "generic", lines: [`1. 構成: 既存の ${configName}(変更なし)`] };
   }
-  if (result.roots.length === 0) {
-    return {
-      kind: "ok",
-      layout: "generic",
-      lines: [
-        `1. 構成: generic(.sln / .vbproj / .csproj が無いため、git が管理しているファイルを対象にする ${configName} を作りました)`,
-        `   対象を絞るときは .repomixignore に除外を書くか、${configName} の extraRoots にディレクトリを書いてください`,
-        `   VB.NET / C# のプロジェクトで .sln が 2 段以上深い場合は見つけられません。kind の代わりに "target": "<パス>/<名前>.sln" を書いてください`,
-      ],
-    };
-  }
+  const heading =
+    result.roots.length > 0
+      ? `1. 構成: generic(.sln / .vbproj / .csproj が無いため ${configName} を作りました)`
+      : result.plan === undefined
+        ? `1. 構成: generic(.sln / .vbproj / .csproj が無いため、git が管理しているファイルを対象にする ${configName} を作りました)`
+        : `1. 構成: generic(.sln / .vbproj / .csproj が無いため、git が管理しているファイルの拡張子を見て ${configName} を作りました)`;
   return {
     kind: "ok",
     layout: "generic",
     lines: [
-      `1. 構成: generic(.sln / .vbproj / .csproj が無いため ${configName} を作りました)`,
-      ...result.roots.map((root) => `   extraRoots: ${root.path}/(kind: "${root.kind}")`),
-      `   VB.NET / C# のプロジェクトで .sln が 2 段以上深い場合は見つけられません。kind と extraRoots の代わりに "target": "<パス>/<名前>.sln" を書いてください`,
+      heading,
+      ...describeCreatedGenericConfig(result, configName).map((line) => `   ${line}`),
+      `   VB.NET / C# のプロジェクトで .sln が 2 段以上深い場合は見つけられません。kind${
+        result.roots.length === 0 ? "" : " と extraRoots"
+      }${result.plan === undefined ? "" : "・include・exclude"} の代わりに "target": "<パス>/<名前>.sln" を書いてください`,
     ],
   };
+}
+
+/**
+ * initConfig が作った generic 構成の説明(init と pack --init-config の表示用。字下げなし)。
+ * 拡張子から決めた include / exclude・入れないもの・大きさの目安
+ */
+export function describeCreatedGenericConfig(
+  result: Extract<InitConfigResult, { kind: "created" }>,
+  configName: string,
+): string[] {
+  if (result.roots.length > 0) {
+    return [
+      ...result.roots.flatMap((root) => [
+        `extraRoots: ${root.path}/(kind: "${root.kind}")`,
+        ...describeRootPlan(root).map((line) => `  ${line}`),
+      ]),
+      `git のリポジトリでないため、extraRoots のディレクトリだけが対象です(直下のファイルは入りません。git のリポジトリにすると、git が管理しているファイルを対象にできます)`,
+    ];
+  }
+  if (result.plan === undefined) {
+    return [
+      `まだファイルが無いため、拡張子から include を決めていません(git が管理しているファイルがすべて対象。ファイルを足した後で ${configName} に include を書けます)`,
+      `対象を絞るときは ${configName} に include / exclude を書くか、.repomixignore に除外を書いてください`,
+    ];
+  }
+  return [
+    ...describeIncludePlan(result.plan, "git が管理しているファイル"),
+    ...describePackSize(result.plan, PASTE_LIMIT_CHARS, PACK_OVERHEAD_CHARS),
+    `対象を変えるときは ${configName} の include / exclude を書き換えてください(include に一致しないものはパックに入りません)`,
+  ];
+}
+
+/** git の外の extraRoots の 1 つについて、決めた include / exclude の説明 */
+function describeRootPlan(root: InitConfigRoot): string[] {
+  const skipped = (root.skippedDirs ?? []).map((dir) => ({ pattern: `${dir.relativePath}/**`, reason: dir.reason, count: 0 }));
+  if (root.plan === undefined) {
+    return skipped.length === 0 ? [] : [`exclude: ${skipped.map((entry) => `${entry.pattern}(${entry.reason})`).join(" / ")}`];
+  }
+  return describeIncludePlan({ ...root.plan, excluded: [...root.plan.excluded, ...skipped] }, `${root.path}/ `);
 }
 
 function toRelative(rootDir: string, absolutePath: string): string {

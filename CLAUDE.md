@@ -110,8 +110,18 @@ slnmix 0.22.2 の `src/` を `src/pack/`、テストを `tests/pack/`、test-fix
   `services/extraRootsCollector.ts` の `collectGitFiles`): 既定の除外 (extraRoots と同じ)・バイナリ (拡張子と NUL)・
   ロックファイル・256KB 超・.gitignore / .repomixignore (追跡中でも)・`<docs>` / `<db_schema>` に入るものを除き、
   理由を `<skipped_files>` に残す。パック自身の出力 (既定名・`-o` / `--prompt-output` の先) は黙って除く。
-  git のリポジトリでなければ extraRoots を書くよう案内して止める。`tazuna init` / `--init-config` は git の
-  リポジトリでは `{ "kind": "generic" }` だけを書く
+  git のリポジトリでなければ extraRoots を書くよう案内して止める。設定のトップレベルの `include` / `exclude`
+  (extraRoots が無いときだけ。v0.18.0)で絞り、外したものは件数と拡張子の内訳だけを `<notes>` と端末に出す
+  (1 件ずつは `<skipped_files>` に載せない。バイナリ・ロックファイル・ignore は従来どおり先に理由を残す)
+- init の拡張子の判定 (`pack/includePlanner.ts`。v0.18.0): `tazuna init` / `--init-config` は、git のリポジトリでは
+  git の一覧 (pack-io.ts の `listPackableGitFiles`。パックと同じ既定の除外の後) を種類に分け、言語の分かるソース・設定・
+  文書を `include` (許可する一覧) に、その中の vendor/ など・`*.min.js`・生成コード (先頭 15 行の強い印だけ。
+  `looksGenerated`) を `exclude` に書く。鍵・認証情報のファイルとデータは中身を読まずに入れない
+  (`include` の拡張子に一致するもの (credentials.json) はパスで exclude)。外したものにしか無い拡張子は include に
+  書かない。`**/*.md`・`**/.gitignore`・設定ファイル自身は常に書く (`ALWAYS_INCLUDE`)。ファイルが無ければ
+  `{ "kind": "generic" }` だけ。git の外では候補名のディレクトリ (無ければ言語の分かるソースを含む直下の
+  ディレクトリ) ごとに include を決め、仮想環境・ドットで始まるディレクトリ・bin / obj / target を exclude に書く
+  (`listDirectoryFilesForInit`)。拡張子の表を足すときは、データ・鍵に当たるものを include 側に入れないこと
 - 言語ごとの伏せ方 (`core/source-lexer.ts` + `core/mask.ts` の `maskLanguageSource`): .ts / .js / .java / .cs /
   .go / .py などは、汎用テキストとして伏せた範囲のうちリテラル (文字列・コメント・数値) の中の部分だけを伏せ、
   コードの部分 (`process.env.API_KEY` など) は戻す。読み違えの恐れのある行 (1 行で閉じるはずの文字列が閉じない)
@@ -529,7 +539,9 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   v0.16.1: 2026-11-02 Shift_JIS のファイルへの「〜」(U+301C) などの JIS と CP932 で対応表の違う 7 文字を
   CP932 の側にそろえて照合・書き込み (以前は変換できないエラーで止まった)。公開せず 0.17.0 に含めた /
   v0.17.0: 2026-11-02 C# の .csproj (パックの論理構成・Designer.cs の UI サマリーとイベント・C# の `<environment>`・
-  手順文 v11・旧スタイル .csproj への登録) + 0.16.1 の修正。**未公開** (公開は利用者)。
+  手順文 v11・旧スタイル .csproj への登録) + 0.16.1 の修正。2026-11-02 公開 /
+  v0.18.0: 2026-11-02 init が実際にあるファイルの拡張子を見て generic 構成の `include` / `exclude` を書く
+  (vendor・圧縮済み・生成コード・鍵・データを入れない) + git の外の Python などの extraRoots。**未公開** (公開は利用者)。
   リポジトリ: https://github.com/ishibashi0112/tazuna (旧 https://github.com/ishibashi0112/petari。GitHub が転送する)
   リリース手順: version を上げて `pnpm publish` (`prepublishOnly` が typecheck → test → build を実行。認証はユーザー)
 - **publish 事故と再発防止 (2026-09-14)**: v0.9.0 は `package.json` の version だけ 0.9.0 で、
