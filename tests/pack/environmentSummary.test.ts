@@ -74,6 +74,8 @@ suite("vbprojParser: ビルド環境(environment)", () => {
       optionExplicit: ["On"],
       optionInfer: ["On"],
       optionCompare: ["Binary"],
+      nullable: [],
+      implicitUsings: [],
       rootNamespaces: ["SalesApp"],
       imports: ["Microsoft.VisualBasic", "System.Data"],
       references: [
@@ -208,5 +210,95 @@ suite("environmentSummary: <environment> の描画", () => {
     assert.ok(block.indexOf("- A(A/A.vbproj)") < block.indexOf("- B(B/B.vbproj)"));
     assert.ok(block.includes("- B(B/B.vbproj)\n  - .vbproj を XML として読めなかったため不明"));
     assert.strictEqual(renderEnvironmentBlock([]), undefined);
+  });
+});
+
+function csEnvironmentOf(xml: string): ProjectEnvironment {
+  const result = parseVbproj(xml, "/repo/App/App.csproj", NO_FILES);
+  assert.strictEqual(result.language, "cs");
+  assert.ok(result.environment !== undefined);
+  return result.environment;
+}
+
+function renderCs(xml: string, style: "legacy" | "sdk" = "legacy"): string {
+  const block = renderEnvironmentBlock([
+    { label: "App", projectPath: "App/App.csproj", style, language: "cs", environment: csEnvironmentOf(xml) },
+  ]);
+  assert.ok(block !== undefined);
+  return block;
+}
+
+suite("environmentSummary: C# の .csproj", () => {
+  test("旧スタイル VS2013: C# 5 とみなし、6 以降の構文を使えないと挙げる。.vbproj の語句は出さない", () => {
+    const block = renderCs(
+      `<Project ToolsVersion="12.0"><PropertyGroup><TargetFrameworkVersion>v4.5</TargetFrameworkVersion><RootNamespace>App</RootNamespace></PropertyGroup>
+       <ItemGroup><Reference Include="System" /><Import Include="System.Linq" /></ItemGroup></Project>`,
+    );
+    assert.ok(block.startsWith("<environment>\n.csproj から読み取ったビルド環境"));
+    assert.ok(
+      block.includes(
+        "  - C#: 5 まで(LangVersion の指定なし。ToolsVersion 12.0 は Visual Studio 2013 の形式のため、Visual Studio 2013 の既定の C# 5 とみなす)。6 以降の文字列補間",
+      ),
+    );
+    assert.ok(block.includes("  - .NET Framework: v4.5"));
+    assert.ok(block.includes("  - 既定の名前空間: App(C# は各ファイルの namespace 宣言で名前空間が決まる"));
+    // <Import> は Visual Basic の項目なので C# では読まない
+    assert.ok(!block.includes("System.Linq"));
+    assert.ok(!block.includes("Visual Basic"));
+    assert.ok(!block.includes("Option"));
+  });
+
+  test("ToolsVersion 15.0 は C# 7、Current は .NET Framework の既定の 7.3 とみなす", () => {
+    assert.ok(renderCs(`<Project ToolsVersion="15.0"></Project>`).includes("C#: 7 まで"));
+    const current = renderCs(`<Project ToolsVersion="Current"></Project>`);
+    assert.ok(current.includes("C#: 7.3 まで"));
+    assert.ok(current.includes("8 以降の switch 式"));
+    assert.ok(!current.includes("7.1 以降"));
+  });
+
+  test("SDK スタイル: ターゲット フレームワークの既定の版(複数なら低い方)", () => {
+    const one = renderCs(`<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0-windows</TargetFramework></PropertyGroup></Project>`, "sdk");
+    assert.ok(one.includes("C#: 12 まで(LangVersion の指定なし。SDK スタイルはターゲット フレームワークの既定の版になるため、net8.0-windows の既定の C# 12 とみなす)"));
+    const many = renderCs(`<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFrameworks>net48;net6.0</TargetFrameworks></PropertyGroup></Project>`, "sdk");
+    assert.ok(many.includes("C#: 7.3 まで(LangVersion の指定なし。SDK スタイルはターゲット フレームワークの既定の版になるため、net48 / net6.0 のうち低い方の既定の C# 7.3 とみなす)"));
+    const core3 = renderCs(`<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>netcoreapp3.1</TargetFramework></PropertyGroup></Project>`, "sdk");
+    assert.ok(core3.includes("C#: 8 まで"));
+    const net10 = renderCs(`<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>`, "sdk");
+    assert.ok(net10.includes("C#: 14 まで"));
+  });
+
+  test("SDK スタイルで既定の版が分からなければ推測しない", () => {
+    const block = renderCs(`<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>$(Tfm)</TargetFramework></PropertyGroup></Project>`, "sdk");
+    assert.ok(block.includes("C#: SDK の既定(LangVersion の指定なし。SDK スタイルはターゲット フレームワークの既定の版になる)"));
+  });
+
+  test("LangVersion の指定はそちらを使う(数でなければそのまま書く)", () => {
+    assert.ok(renderCs(`<Project ToolsVersion="12.0"><PropertyGroup><LangVersion>7.3</LangVersion></PropertyGroup></Project>`).includes("C#: 7.3 まで(LangVersion の指定: 7.3)"));
+    assert.ok(renderCs(`<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><LangVersion>latest</LangVersion></PropertyGroup></Project>`, "sdk").includes("C#: latest(LangVersion の指定)"));
+  });
+
+  test("Nullable・ImplicitUsings・<Using>(Static・Alias。Remove は載せない)・PackageReference", () => {
+    const block = renderCs(
+      `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>disable</ImplicitUsings></PropertyGroup>
+       <ItemGroup><Using Include="System.Data" /><Using Include="App.Util" Static="true" /><Using Include="System.Text.Json" Alias="Json" /><Using Remove="System.Net.Http" />
+       <PackageReference Include="Dapper" Version="2.1.35" /></ItemGroup></Project>`,
+      "sdk",
+    );
+    assert.ok(block.includes("  - Nullable: enable(null 許容参照型が有効。null になり得る参照型には ? を付ける)"));
+    assert.ok(block.includes("  - ImplicitUsings: disable\n"));
+    assert.ok(block.includes("  - プロジェクト全体の using(global using): System.Data, static App.Util, Json = System.Text.Json"));
+    assert.ok(!block.includes("System.Net.Http"));
+    assert.ok(block.includes("Dapper 2.1.35"));
+  });
+
+  test("VB と C# のプロジェクトを並べると見出しは両方の拡張子になる", () => {
+    const block = renderEnvironmentBlock([
+      { label: "A", projectPath: "A/A.vbproj", style: "legacy", environment: environmentOf(`<Project ToolsVersion="12.0"></Project>`) },
+      { label: "B", projectPath: "B/B.csproj", style: "legacy", language: "cs", environment: undefined },
+    ]);
+    assert.ok(block !== undefined);
+    assert.ok(block.startsWith("<environment>\n.vbproj / .csproj から読み取ったビルド環境"));
+    assert.ok(block.includes("  - Visual Basic: 12.0 まで"));
+    assert.ok(block.includes("- B(B/B.csproj)\n  - .csproj を XML として読めなかったため不明"));
   });
 });

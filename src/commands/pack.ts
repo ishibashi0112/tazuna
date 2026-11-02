@@ -2,7 +2,7 @@
  * tazuna pack — コードベースを AI チャットに渡す 1 ファイル(repomix 互換のパック)と、
  * チャット本文に貼る指示テキスト(.prompt.md)を作る(旧 slnmix)。
  *
- * .sln / .vbproj の論理構成(Link・DependentUpon 解決済み)か、設定ファイルの extraRoots に宣言した
+ * .sln / .vbproj / .csproj の論理構成(Link・DependentUpon 解決済み)か、設定ファイルの extraRoots に宣言した
  * ディレクトリ(kind: "generic")に基づく。解析・出力は src/pack/ のコアが担い、ここは引数処理とファイル I/O。
  */
 import * as fs from "node:fs";
@@ -40,11 +40,13 @@ import {
 import { DOC_TEMPLATES_DIR } from "../pack/assets/docTemplates.ts";
 import { buildRepomixOutput, type RepomixSource } from "../pack/services/repomixExporter.ts";
 import { CONFIG_FILE_NAME, configFileNameIn, LEGACY_CONFIG_FILE_NAME, loadSlnmixConfig } from "../pack/slnmixConfig.ts";
+import { projectLanguageOf, type ProjectLanguage } from "../pack/projectLanguage.ts";
 import { parseSln } from "../pack/slnParser.ts";
 import { parseVbproj } from "../pack/vbprojParser.ts";
 import {
   createGitignoreEvaluator,
   fileSizeOf,
+  findTargetQuietly,
   FS_DEPS,
   isDirectoryPath,
   isFilePath,
@@ -55,14 +57,14 @@ import {
 } from "./pack-io.ts";
 
 export const PACK_USAGE = `使い方:
-  ${PACK_COMMAND} [<solution.sln | project.vbproj | ディレクトリ>] [オプション]
+  ${PACK_COMMAND} [<solution.sln | project.vbproj | project.csproj | ディレクトリ>] [オプション]
 
   入力を省略するとカレントディレクトリ(ディレクトリ指定ならその直下)の
-  *.sln を自動検出します(なければ *.vbproj。複数ある場合は候補を表示)。
+  *.sln を自動検出します(なければ *.vbproj / *.csproj。複数ある場合は候補を表示)。
   その場所の設定ファイル(${CONFIG_FILE_NAME}。旧名の ${LEGACY_CONFIG_FILE_NAME} も読みます)に
   "target": "dotnet/App.sln" があればそれを使います。同じ設定が "kind": "generic" なら
-  .sln / .vbproj を探さず、git が管理しているファイル(extraRoots を書けば、宣言した
-  ディレクトリだけ)でパックします(VB.NET 以外のプロジェクト。${INIT_COMMAND} で作成)。
+  .sln / .vbproj / .csproj を探さず、git が管理しているファイル(extraRoots を書けば、宣言した
+  ディレクトリだけ)でパックします(.sln の無いプロジェクト。${INIT_COMMAND} で作成)。
 
   ルート(<file path> の基準。設定ファイル・protocol.md・docs/・出力先もここ)は
   --root > 入力のディレクトリから上に向かって最初に見つかる設定ファイルの場所
@@ -73,12 +75,12 @@ export const PACK_USAGE = `使い方:
   -o, --output <file>   出力先(既定: ルートの repomix-output.xml)
       --root <dir>      ルートを明示する(入力はその配下にあること)
       --stdout          ファイルではなく標準出力へ書く(BOM なし)
-      --include-designer  Designer 関連ファイル(*.Designer.vb 等)を原文のまま含める
+      --include-designer  Designer 関連ファイル(*.Designer.vb / *.Designer.cs 等)を原文のまま含める
       --include-designer-file <名前|パターン>
                         指定した Designer 関連ファイルだけ原文のまま含める
                         (複数指定可。* をワイルドカードに使える。ファイル名
                         または論理パスに全体一致)
-      --no-ui-summary   Designer.vb からの UI サマリー(<ui_summary>)生成を無効化
+      --no-ui-summary   Designer.vb / Designer.cs からの UI サマリー(<ui_summary>)生成を無効化
       --no-mask         認証情報の自動マスク([MASKED] 置換)を無効化
       --no-strict-mask  高エントロピー文字列(ランダム英数字列)の機械的マスクを無効化
       --no-gitignore    .gitignore / .repomixignore による除外を無効化
@@ -98,7 +100,7 @@ export const PACK_USAGE = `使い方:
       --design <名前|file>
                         design モードで対象の設計書を指定
       --init-docs       docs/ 連携だけを設定する(${INIT_COMMAND} に含まれる)
-      --init-config     VB.NET 以外のプロジェクト向けの ${CONFIG_FILE_NAME}
+      --init-config     .sln の無いプロジェクト向けの ${CONFIG_FILE_NAME}
                         (kind: "generic")だけを作る(${INIT_COMMAND} に含まれる)
       --plan <file>     implement モードで承認済みの方針を <plan> として同梱する
       --procedure-file <path>
@@ -133,7 +135,27 @@ function defaultPromptPath(outputPath: string): string {
   return `${base}.prompt.md`;
 }
 
-/** 入力(.sln / .vbproj)から RepomixSource[] を組み立てる */
+/**
+ * --print-procedure 用: 入力(省略時は自動検出)のプロジェクトの言語。診断は出さない
+ * (手順文を標準出力に書くだけのため)。入力が見つからなければ undefined(Visual Basic の文面)
+ */
+function languagesForPrint(input: string | undefined): ProjectLanguage[] | undefined {
+  const targetPath = findTargetQuietly(input);
+  if (targetPath === undefined) {
+    return undefined;
+  }
+  if (!/\.sln$/i.test(targetPath)) {
+    const language = projectLanguageOf(targetPath);
+    return language === undefined ? undefined : [language];
+  }
+  const content = readSourceTextFile(targetPath);
+  if (content === undefined) {
+    return undefined;
+  }
+  return parseSln(content, targetPath, FS_DEPS).projects.map((project) => project.language);
+}
+
+/** 入力(.sln / .vbproj / .csproj)から RepomixSource[] を組み立てる */
 function collectSources(targetPath: string): RepomixSource[] {
   const content = readSourceTextFile(targetPath);
   if (content === undefined) {
@@ -162,7 +184,7 @@ function collectSources(targetPath: string): RepomixSource[] {
   }
 
   const parseResult = parseVbproj(content, targetPath, FS_DEPS);
-  const label = path.basename(targetPath).replace(/\.vbproj$/i, "");
+  const label = path.basename(targetPath).replace(/\.(vbproj|csproj)$/i, "");
   printDiagnostics(label, parseResult.diagnostics);
   return [{ label, parseResult }];
 }
@@ -222,6 +244,8 @@ export function packCommand(argv: string[]): number {
         tests: "placeholder",
         db: "placeholder",
         layout: printConfig.config.kind,
+        // C# のプロジェクトがあれば C# の語句にする(入力が見つからなければ Visual Basic)
+        languages: printConfig.config.kind === "generic" ? undefined : languagesForPrint(positionals[0]),
       }),
     );
     return 0;
@@ -237,7 +261,7 @@ export function packCommand(argv: string[]): number {
     return 1;
   }
 
-  // VB.NET 以外のプロジェクト向けの設定ファイルを作る(入力の解決より前。.sln は無い前提)
+  // .sln の無いプロジェクト向けの設定ファイルを作る(入力の解決より前。.sln は無い前提)
   if (values["init-config"]) {
     const initRoot = path.resolve(process.cwd(), values.root ?? positionals[0] ?? ".");
     const result = initConfig(
@@ -378,7 +402,7 @@ export function packCommand(argv: string[]): number {
   }
   if (layout === "solution" && config.kind === "generic") {
     err(
-      `[warning] ${configName} は kind: "generic" ですが、入力に .sln / .vbproj が指定されたため従来どおり論理構成で出力します`,
+      `[warning] ${configName} は kind: "generic" ですが、入力に .sln / .vbproj / .csproj が指定されたため従来どおり論理構成で出力します`,
     );
   }
   if (config.sources.length > 0) {
@@ -539,6 +563,7 @@ export function packCommand(argv: string[]): number {
       tests: autoTests.present,
       db: dbSchema !== undefined,
       layout,
+      languages: sources.map((source) => source.parseResult.language),
     },
     rootDir,
     process.cwd(),

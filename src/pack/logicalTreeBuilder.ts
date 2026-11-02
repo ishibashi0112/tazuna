@@ -45,7 +45,7 @@ interface WorkEntry {
 
 function projectLabelOf(projectPath: string): string {
   const fileName = projectPath.split(/[\\/]/).pop() ?? projectPath;
-  return fileName.replace(/\.vbproj$/i, "");
+  return fileName.replace(/\.(vbproj|csproj)$/i, "");
 }
 
 function compareNodes(a: LegacyTreeNode, b: LegacyTreeNode): number {

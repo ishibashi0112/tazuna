@@ -22,7 +22,7 @@ function parseSampleSln(): SlnParseResult {
 suite("slnParser: Sample.sln fixture", () => {
   const result = parseSampleSln();
 
-  test(".vbproj のプロジェクトのみ抽出する", () => {
+  test(".vbproj / .csproj のプロジェクトのみ抽出する", () => {
     assert.deepStrictEqual(
       result.projects.map((p) => p.name),
       ["Basic", "LinkedApp", "Gone"],
@@ -59,7 +59,7 @@ suite("slnParser: Sample.sln fixture", () => {
     );
     assert.ok(
       result.diagnostics.some(
-        (d) => d.severity === "info" && d.message.includes("CSharpLib.csproj"),
+        (d) => d.severity === "info" && d.message.includes("FSharpLib.fsproj"),
       ),
     );
   });
@@ -79,7 +79,7 @@ suite("slnParser: 入力の頑健性", () => {
     assert.strictEqual(result.projects[0]?.name, "App");
   });
 
-  test("VB プロジェクトが 1 件もない場合は警告を残す", () => {
+  test("VB / C# のプロジェクトが 1 件もない場合は警告を残す", () => {
     const content = "Microsoft Visual Studio Solution File, Format Version 12.00\n";
     const result = parseSln(content, "/tmp/sol/Empty.sln", realFs);
     assert.strictEqual(result.projects.length, 0);
@@ -97,6 +97,53 @@ suite("slnParser: 入力の頑健性", () => {
         (d) => d.severity === "warning" && d.message.includes("ヘッダー"),
       ),
     );
+  });
+});
+
+suite("slnParser: C# の .csproj", () => {
+  const CONTENT =
+    "Microsoft Visual Studio Solution File, Format Version 12.00\n" +
+    'Project("{F184B08F-C81C-45F6-A57F-5ABD9991F28F}") = "Vb", "Vb\\Vb.vbproj", "{B1111111-1111-1111-1111-111111111111}"\n' +
+    "EndProject\n" +
+    'Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cs", "Cs\\Cs.csproj", "{B2222222-2222-2222-2222-222222222222}"\n' +
+    "EndProject\n" +
+    'Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Sdk", "Sdk\\Sdk.CSPROJ", "{B3333333-3333-3333-3333-333333333333}"\n' +
+    "EndProject\n";
+
+  test(".vbproj と .csproj(大文字の拡張子も)を出現順に取り、言語を付ける", () => {
+    const result = parseSln(CONTENT, "/tmp/sol/Mixed.sln", { fileExists: () => true });
+    assert.deepStrictEqual(
+      result.projects.map((p) => [p.name, p.language]),
+      [
+        ["Vb", "vb"],
+        ["Cs", "cs"],
+        ["Sdk", "cs"],
+      ],
+    );
+  });
+
+  test("同じフォルダの .sln から参照されていない .csproj にも警告を出す", () => {
+    const result = parseSln(CONTENT, "/tmp/sol/Mixed.sln", {
+      fileExists: () => true,
+      listFileNames: () => ["Old.csproj", "Old.fsproj"],
+    });
+    const warnings = result.diagnostics.filter((d) => d.message.includes("参照されていない"));
+    assert.strictEqual(warnings.length, 1);
+    assert.ok(warnings[0]?.message.includes("Old.csproj"));
+  });
+
+  test("mixed fixture: F# のプロジェクトはスキップし、診断に残す", () => {
+    const solutionPath = path.join(FIXTURES_ROOT, "mixed", "Mixed.sln");
+    const result = parseSln(fs.readFileSync(solutionPath, "utf8"), solutionPath, realFs);
+    assert.deepStrictEqual(
+      result.projects.map((p) => [p.name, p.language, p.exists]),
+      [
+        ["Basic", "vb", true],
+        ["LegacyApp", "cs", true],
+        ["SdkApp", "cs", true],
+      ],
+    );
+    assert.ok(result.diagnostics.some((d) => d.message.includes("FSharpLib.fsproj")));
   });
 });
 

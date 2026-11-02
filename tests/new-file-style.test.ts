@@ -70,6 +70,17 @@ describe("resolveNewFileStyle (設計書 §11.2)", () => {
     expect(ts.config.bom).toBe(false);
   });
 
+  it(".cs: 手本がなければ Visual Studio と同じ utf8 + BOM + crlf。手本があればそれに従い、BOM を足さない", () => {
+    const none = resolveNewFileStyle("App/New.cs", { encoding: "auto" }, [group("App", [])]);
+    expect(none.config).toEqual({ encoding: "utf8", bom: true, eol: "crlf" });
+    expect(none.basis).toContain(".cs の既定");
+    const sdk = resolveNewFileStyle("src/New.cs", { encoding: "auto" }, [group("src", [utf8Lf, utf8Lf])]);
+    expect(sdk.config).toEqual({ encoding: "utf8", bom: false, eol: "lf" });
+    expect(sdk.basis).not.toContain("BOM を付与");
+    const legacy = resolveNewFileStyle("App/New.cs", { encoding: "auto" }, [group("App", [sjisCrlf, sjisCrlf, utf8BomCrlf])]);
+    expect(legacy.config).toEqual({ encoding: "shift_jis", bom: false, eol: "crlf" });
+  });
+
   it("明示された eol / bom は推定より優先する", () => {
     const r = resolveNewFileStyle("App/New.vb", { encoding: "auto", eol: "lf", bom: false }, [
       group("App", [sjisCrlf, utf8Lf, utf8Lf]),

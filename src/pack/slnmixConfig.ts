@@ -92,8 +92,8 @@ export interface DocsConfig {
 
 /**
  * プロジェクトの構成の種類。
- * - "solution": .sln / .vbproj の論理構成に基づく(既定。従来どおり)
- * - "generic": .sln / .vbproj を使わず、extraRoots に宣言されたディレクトリだけで
+ * - "solution": .sln / .vbproj / .csproj の論理構成に基づく(既定。従来どおり)
+ * - "generic": .sln / .vbproj / .csproj を使わず、extraRoots に宣言されたディレクトリだけで
  *   パックする(VB.NET 以外のプロジェクト向け。v0.17.0〜)。引数なしの `tazuna pack`
  *   がこの設定を見て .sln の探索を省く。明示フラグにしたのは「.sln を探さなかった」
  *   理由をログで示すため(決定ログ 2026-10-10)
@@ -109,7 +109,7 @@ export interface SlnmixConfig {
   /** 構成の種類(省略時 "solution") */
   kind: ConfigKind;
   /**
-   * 入力(.sln / .vbproj)のルート相対パス。引数なしの `tazuna pack` がこれを使う
+   * 入力(.sln / .vbproj / .csproj)のルート相対パス。引数なしの `tazuna pack` がこれを使う
    * (web + dotnet を分けた構成で .sln がサブディレクトリにあるとき用)
    */
   target?: string | undefined;
@@ -355,9 +355,9 @@ function parseKind(value: unknown, fileName: string, diagnostics: ParseDiagnosti
   return "solution";
 }
 
-const TARGET_EXTENSION = /\.(sln|vbproj)$/i;
+const TARGET_EXTENSION = /\.(sln|vbproj|csproj)$/i;
 
-/** `target`: ルート配下の相対パスで .sln / .vbproj を指す。それ以外は警告して無視 */
+/** `target`: ルート配下の相対パスで .sln / .vbproj / .csproj を指す。それ以外は警告して無視 */
 function parseTarget(value: unknown, fileName: string, diagnostics: ParseDiagnostic[]): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -381,7 +381,7 @@ function parseTarget(value: unknown, fileName: string, diagnostics: ParseDiagnos
   if (!TARGET_EXTENSION.test(normalized)) {
     diagnostics.push({
       severity: "warning",
-      message: `${fileName}: target は .sln / .vbproj を指定してください: ${text}(無視します)`,
+      message: `${fileName}: target は .sln / .vbproj / .csproj を指定してください: ${text}(無視します)`,
     });
     return undefined;
   }

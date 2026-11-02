@@ -1,3 +1,5 @@
+import type { ProjectLanguage } from "./projectLanguage.ts";
+
 /**
  * パーサー出力・診断のドメイン型。
  * 引き継ぎ仕様書 §10 の型設計案に準拠する。
@@ -68,7 +70,7 @@ export interface ParseDiagnostic {
 export type ProjectStyle = "legacy" | "sdk";
 
 /**
- * .vbproj から静的に読んだビルド環境(手順文 v10。<environment> の材料)。
+ * .vbproj / .csproj から静的に読んだビルド環境(手順文 v10。<environment> の材料)。
  * プロパティは出現順の値をすべて残す(Condition 付きの PropertyGroup で値が分かれることがあるため。
  * Condition は評価しない)。指定の無いものは空配列
  */
@@ -82,22 +84,31 @@ export interface ProjectEnvironment {
   optionExplicit: string[];
   optionInfer: string[];
   optionCompare: string[];
+  /** C# の null 許容参照型(<Nullable>) */
+  nullable: string[];
+  /** C# の暗黙の using(<ImplicitUsings>) */
+  implicitUsings: string[];
   rootNamespaces: string[];
-  /** プロジェクト全体の Imports(ItemGroup の <Import Include="...">) */
+  /**
+   * プロジェクト全体の名前空間の取り込み。VB は ItemGroup の <Import Include="...">(Imports)、
+   * C# は <Using Include="...">(global using。Static は「static 名前」、Alias は「別名 = 名前」)
+   */
   imports: string[];
   /** 参照(Reference / ProjectReference / PackageReference / COMReference)を表示用に整えたもの */
   references: string[];
 }
 
-/** parseVbproj の戻り値 */
+/** parseVbproj の戻り値(.vbproj と .csproj の両方) */
 export interface VbprojParseResult {
-  /** 解析対象 .vbproj の絶対パス */
+  /** 解析対象 .vbproj / .csproj の絶対パス */
   projectPath: string;
+  /** プロジェクトの言語(拡張子から決める。.csproj 以外は vb) */
+  language: ProjectLanguage;
   /** .vbproj のあるディレクトリ(相対パス解決の基準) */
   projectDir: string;
   projectStyle: ProjectStyle;
   /**
-   * SDK スタイルで既定の Compile グロブ(`**\/*.vb`)を展開したか。
+   * SDK スタイルで既定の Compile グロブ(`**\/*.vb`、C# は `**\/*.cs`)を展開したか。
    * legacy、または EnableDefaultCompileItems=false のときは false。
    * true のとき items には展開した項目が resolved として含まれる
    * (MSBuild の完全評価ではない旨を出力側で明記する)
@@ -123,6 +134,8 @@ export interface SolutionProject {
   absolutePath: string;
   projectGuid: string;
   projectTypeGuid: string;
+  /** プロジェクトファイルの拡張子から決めた言語 */
+  language: ProjectLanguage;
   /** 実ファイルが存在するか */
   exists: boolean;
 }
@@ -131,7 +144,7 @@ export interface SolutionProject {
 export interface SlnParseResult {
   solutionPath: string;
   solutionDir: string;
-  /** .vbproj のプロジェクトのみ(Solution Folder・他言語はスキップし診断へ) */
+  /** .vbproj / .csproj のプロジェクトのみ(Solution Folder・他言語はスキップし診断へ) */
   projects: SolutionProject[];
   diagnostics: ParseDiagnostic[];
 }

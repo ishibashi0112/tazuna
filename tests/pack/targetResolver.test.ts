@@ -77,6 +77,26 @@ suite("targetResolver: 自動検出", () => {
     assert.ok(result.kind === "file" && result.path.endsWith("App.vbproj"));
   });
 
+  test(".sln がなければ .csproj にもフォールバック", () => {
+    const deps = fakeDeps({ "/work/app": ["App.csproj", "Program.cs"] });
+    const result = resolveTarget(undefined, CWD, deps);
+    assert.ok(result.kind === "file" && result.path.endsWith("App.csproj"));
+  });
+
+  test(".vbproj と .csproj が 1 つずつなら候補一覧付きのエラー(勝手に選ばない)", () => {
+    const deps = fakeDeps({ "/work/app": ["App.vbproj", "Lib.csproj"] });
+    const result = resolveTarget(undefined, CWD, deps);
+    assert.strictEqual(result.kind, "error");
+    assert.ok(result.kind === "error" && result.message.includes("- App.vbproj"));
+    assert.ok(result.kind === "error" && result.message.includes("- Lib.csproj"));
+  });
+
+  test(".csproj の明示指定はそのまま採用", () => {
+    const deps = fakeDeps({ "/work/app": ["App.csproj"] });
+    const result = resolveTarget("App.csproj", CWD, deps);
+    assert.ok(result.kind === "file" && !result.autoDetected && result.path.endsWith("App.csproj"));
+  });
+
   test(".sln が複数なら候補一覧付きのエラー(勝手に選ばない)", () => {
     const deps = fakeDeps({ "/work/app": ["A.sln", "B.sln", "C.vbproj"] });
     const result = resolveTarget(undefined, CWD, deps);
@@ -147,13 +167,13 @@ suite("targetResolver: slnmix.config.json の target", () => {
     assert.ok(result.kind === "error" && result.message.includes("target が見つかりません"));
   });
 
-  test("target が .sln / .vbproj でなければエラー", () => {
+  test("target が .sln / .vbproj / .csproj でなければエラー", () => {
     const deps: TargetResolverDeps = {
       ...fakeDeps({ "/work/app": ["slnmix.config.json", "package.json"] }),
       readConfigTarget: () => "package.json",
     };
     const result = resolveTarget(undefined, CWD, deps);
-    assert.ok(result.kind === "error" && result.message.includes(".sln / .vbproj を指定"));
+    assert.ok(result.kind === "error" && result.message.includes(".sln / .vbproj / .csproj を指定"));
   });
 
   test("設定に target が無ければ従来どおり直下を探す", () => {

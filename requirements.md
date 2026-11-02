@@ -110,7 +110,7 @@ new code
   「search ブロックはファイル内で一意に特定できる範囲を含めること」
   「一意に特定できる範囲のうち最小(目安 3〜8 行)にすること」(v0.9.0 / 規約文 v4)を明記する。
 
-#### 3.2.1 create した `.vb` の `.vbproj` 自動登録(v0.9.0)
+#### 3.2.1 create した `.vb` の `.vbproj` 自動登録(v0.9.0。`.cs` の `.csproj` は v0.17.0)
 
 旧スタイル `.vbproj` は `<Compile Include>` に載っていないファイルをコンパイルしない。
 AI に登録させるとパックに `.vbproj` 本体がなく SEARCH が一致しないため、
@@ -129,6 +129,11 @@ AI に登録させるとパックに `.vbproj` 本体がなく SEARCH が一致�
   (manifest の `op: "vbproj"`)。同じ changes.md が `.vbproj` 自体を変更する場合は変更後の内容に登録を重ねる
 - `delete` 時の `.vbproj` からの除去は**行わない**(削除の誤りは影響が大きい)
 - 無効化: config `"vbproj": { "register": false }` または `--no-vbproj`
+- C#(v0.17.0): `create` の対象が `.cs` なら最寄りの旧スタイル `*.csproj` に同じ規則で登録する。
+  探索は「最寄りのプロジェクトファイル(`.vbproj` / `.csproj`)のあるディレクトリ」で止め、その中に同じ言語の
+  プロジェクトファイルが無ければ登録しない(`.vb` の最寄りが `.csproj` など。上にある別のプロジェクトへ登録しない)。
+  `<SubType>` は `class X : Form` / `UserControl`(`System.Windows.Forms.`・`global::` 付き、基底を次の行に書く形も)、
+  `X.Designer.cs` には `<DependentUpon>X.cs</DependentUpon>`。無効化の設定・オプションは `.vbproj` と共通
 
 ### 3.3 マーカー構文
 
@@ -193,7 +198,7 @@ AI チャットが規約から軽微に逸脱した出力(実運用で観測)を
 - `--partial` : 検証失敗ブロックをスキップし、成功分のみ適用(既定は all-or-nothing)
 - `--root <dir>` : プロジェクトルートの明示指定
 - `--yes` : 確認プロンプトをスキップ
-- `--no-vbproj` : create した `.vb` の `.vbproj` 自動登録(§3.2.1)を今回だけ無効化
+- `--no-vbproj` : create した `.vb` / `.cs` の `.vbproj` / `.csproj` 自動登録(§3.2.1)を今回だけ無効化
 - `--force` : 履歴で適用済みの changes.md でも再適用する(§6.1 の二重適用防止を今回だけ解除)
 
 ### 4.2 `tazuna undo [ID]`
@@ -248,7 +253,7 @@ v0.15.0 で旧 slnmix init と 1 つにした(設計書 docs/HANDOFF-slnmix-peta
 対話なしで、既存のファイルは変えない(何度実行しても同じ結果)。実行内容:
 
 1. 構成の判定: 設定ファイル(`tazuna.config.json`。旧名 `slnmix.config.json` も)があればそのまま使う。
-   なければ、直下に `.sln` / `.vbproj` があれば作らない。1 段下に `.sln` が 1 つだけあれば `target` で指す設定を作る。
+   なければ、直下に `.sln` / `.vbproj` / `.csproj` があれば作らない。1 段下に `.sln` が 1 つだけあれば `target` で指す設定を作る。
    どちらも無ければ generic 構成(git のリポジトリでは `{ "kind": "generic" }`、それ以外は実在する `src` / `tests`
    などを `extraRoots` に書く)
 2. docs/ 連携(`docs/design/` `docs/spec/` `docs/README.md` と設定の `docs`)
@@ -454,7 +459,9 @@ AI チャットへの貼り返しが 1 ペーストで済む。config で無効�
 - `"newFile": { "encoding": "auto" }`(v0.9.0。`tazuna init` の雛形の既定)は作成先と同じ
   ディレクトリの既存テキストファイル(同じ拡張子を優先、なければ任意のテキスト。なければ上位
   ディレクトリを 1 段ずつルートまで)の多数決でエンコーディング / BOM / 改行を決める。
-  手本がなければ `.vb` → UTF-8 + BOM + CRLF、それ以外 → UTF-8 / BOM なし / LF。
+  手本がなければ `.vb` / `.cs`(v0.17.0)→ UTF-8 + BOM + CRLF(Visual Studio の新規ファイルと同じ)、
+  それ以外 → UTF-8 / BOM なし / LF。`.cs` は手本があれば BOM なしでもそれに従う(C# のコンパイラは BOM なしの
+  UTF-8 を読め、SDK スタイルのリポジトリは BOM なしが多いため)。
   `.vb` で UTF-8 かつ BOM なしになった場合は BOM を付ける(BOM なし UTF-8 の日本語は
   vbc / VS がシステムコードページとみなして化ける。ASCII のみの Shift_JIS が UTF-8 判定される
   既知の限界への対処でもある)。採用した設定と根拠を結果表示に 1 行出す。
@@ -485,7 +492,7 @@ AI チャットへの貼り返しが 1 ペーストで済む。config で無効�
   "historyLimit": null,          // 履歴の保持件数上限(null = 無制限)
   "vscodeCommand": "code",       // show で使うコマンド
   "clipReportOnFailure": true,   // 失敗レポートをクリップボードへ自動コピー(§7)
-  "vbproj": { "register": true } // create した .vb の .vbproj 自動登録(§3.2.1)
+  "vbproj": { "register": true } // create した .vb / .cs の .vbproj / .csproj 自動登録(§3.2.1)
 }
 ```
 

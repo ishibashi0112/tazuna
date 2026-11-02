@@ -1,6 +1,7 @@
 /**
- * create した .vb の旧スタイル .vbproj への自動登録 (設計書 §11.1 P1-a) — apply の結線部。
- * 判定・挿入は core/vbproj.ts、探索は infra/vbproj.ts。
+ * create した .vb / .cs の旧スタイル .vbproj / .csproj への自動登録 (設計書 §11.1 P1-a。C# は
+ * tazuna 0.17.0 から) — apply の結線部。判定・挿入は core/vbproj.ts、探索は infra/vbproj.ts。
+ * .vb は最寄りの .vbproj、.cs は最寄りの .csproj に登録する (最寄りのプロジェクトが別の言語なら登録しない)。
  *
  * - 登録の失敗は create 自体の成否に影響しない (レポートに載せるだけ)
  * - 同じ changes.md が .vbproj 自体を変更する場合は、その変更後の内容に対して登録する
@@ -28,9 +29,9 @@ import { isInsideRoot, readFileState } from "../infra/files.ts";
 import { findNearestVbproj } from "../infra/vbproj.ts";
 
 export interface VbprojRegistration {
-  /** ルート相対の .vbproj パス */
+  /** ルート相対のプロジェクトファイル (.vbproj / .csproj) のパス */
   vbproj: string;
-  /** 登録した .vb (ルート相対) */
+  /** 登録した .vb / .cs (ルート相対) */
   file: string;
   include: string;
   subType?: string;
@@ -41,6 +42,8 @@ export interface VbprojRegistration {
 export interface VbprojNote {
   file: string;
   message: string;
+  /** 表示の見出し ("vbproj" / "csproj")。ファイルの言語で決まる */
+  label: string;
 }
 
 export interface VbprojWrite {
@@ -66,18 +69,30 @@ interface LoadedVbproj {
 
 const EMPTY: VbprojPlan = { writes: new Map(), registrations: [], notes: [] };
 
+/** 作ったファイルの言語に対応するプロジェクトファイル */
+function projectKindOf(file: string): { language: "vb" | "cs"; extension: string; label: string } {
+  return /\.cs$/i.test(file)
+    ? { language: "cs", extension: ".csproj", label: "csproj" }
+    : { language: "vb", extension: ".vbproj", label: "vbproj" };
+}
+
+/** プロジェクトファイルのパスの見出し ("vbproj" / "csproj") */
+function labelOfProject(path: string): string {
+  return /\.csproj$/i.test(path) ? "csproj" : "vbproj";
+}
+
 function relDirOf(path: string): string {
   const d = dirname(path);
   return d === "." ? "" : d;
 }
 
 /**
- * 書き込み対象 (applicable) の outcomes から create された .vb を拾い、登録計画を立てる。
+ * 書き込み対象 (applicable) の outcomes から create された .vb / .cs を拾い、登録計画を立てる。
  * 書き込みは行わない。
  */
 export function planVbprojRegistrations(root: string, applicable: FileOutcome[]): VbprojPlan {
   const creates = applicable
-    .filter((o) => o.change.op === "create" && /\.vb$/i.test(o.change.path))
+    .filter((o) => o.change.op === "create" && /\.(vb|cs)$/i.test(o.change.path))
     // X.vb を X.Designer.vb より先に登録する (VS の並びに合わせる。安定ソート)
     .map((o, i) => ({ o, i, designer: designerParentName(basename(o.change.path)) !== null }))
     .sort((a, b) => Number(a.designer) - Number(b.designer) || a.i - b.i)
@@ -100,21 +115,26 @@ export function planVbprojRegistrations(root: string, applicable: FileOutcome[])
 
   for (const o of creates) {
     const file = o.change.path;
-    const lookup = findNearestVbproj(root, relDirOf(file));
+    const kind = projectKindOf(file);
+    const note = (message: string): void => {
+      plan.notes.push({ file, message, label: kind.label });
+    };
+    const lookup = findNearestVbproj(root, relDirOf(file), kind.extension);
     if (lookup.kind === "none") {
-      plan.notes.push({ file, message: "vbproj が見つからないため未登録" });
+      note(`${kind.label} が見つからないため未登録`);
       continue;
     }
     if (lookup.kind === "multiple") {
-      plan.notes.push({
-        file,
-        message: `${lookup.dir} に複数の .vbproj があるため未登録 (${lookup.names.join(", ")})。手動で登録してください`,
-      });
+      note(`${lookup.dir} に複数の ${kind.extension} があるため未登録 (${lookup.names.join(", ")})。手動で登録してください`);
+      continue;
+    }
+    if (lookup.kind === "other-language") {
+      note(`最寄りのプロジェクト ${lookup.path} は ${kind.extension} ではないため未登録`);
       continue;
     }
     const target = load(lookup.path);
     if ("error" in target) {
-      plan.notes.push({ file, message: `${lookup.path} に未登録 (${target.error})` });
+      note(`${lookup.path} に未登録 (${target.error})`);
       continue;
     }
 
@@ -128,7 +148,7 @@ export function planVbprojRegistrations(root: string, applicable: FileOutcome[])
         opts.dependentUpon = parent;
       }
     } else if (o.change.op === "create") {
-      const subType = detectSubType(o.change.content);
+      const subType = detectSubType(o.change.content, kind.language);
       if (subType !== undefined) opts.subType = subType;
     }
 
@@ -138,26 +158,20 @@ export function planVbprojRegistrations(root: string, applicable: FileOutcome[])
       opts,
     );
     if (r.status === "registered") {
-      plan.notes.push({ file, message: `${lookup.path} に登録済み (変更なし)` });
+      note(`${lookup.path} に登録済み (変更なし)`);
       continue;
     }
     if (r.status === "sdk-style") {
-      plan.notes.push({ file, message: `${lookup.path} は SDK スタイルのため登録不要` });
+      note(`${lookup.path} は SDK スタイルのため登録不要`);
       continue;
     }
     if (r.status === "unsupported") {
-      plan.notes.push({
-        file,
-        message: `${lookup.path} は登録できない形式のため未登録 (${r.reason})。手動で登録してください`,
-      });
+      note(`${lookup.path} は登録できない形式のため未登録 (${r.reason})。手動で登録してください`);
       continue;
     }
     const bad = findUnencodable(r.inserted.join("\n"), target.doc.encoding);
     if (bad.length > 0) {
-      plan.notes.push({
-        file,
-        message: `${lookup.path} (Shift_JIS) に変換できない文字がパスに含まれるため未登録: ${describeChars(bad)}`,
-      });
+      note(`${lookup.path} (Shift_JIS) に変換できない文字がパスに含まれるため未登録: ${describeChars(bad)}`);
       continue;
     }
     const inserted: DocLine[] = r.inserted.map((text) => ({ text, raw: null, eol: null }));
@@ -177,7 +191,7 @@ export function planVbprojRegistrations(root: string, applicable: FileOutcome[])
   return plan;
 }
 
-/** .vbproj の現在の内容 (changes.md が同じ .vbproj を変更するならその変更後) を読む */
+/** プロジェクトファイルの現在の内容 (changes.md が同じファイルを変更するならその変更後) を読む */
 function loadVbproj(
   root: string,
   vbproj: string,
@@ -186,7 +200,9 @@ function loadVbproj(
   const own = applicable.find((o) => o.change.path === vbproj);
   let bytes: Uint8Array | null;
   if (own !== undefined) {
-    if (own.change.op === "delete") return { error: "changes.md がこの .vbproj を削除するため" };
+    if (own.change.op === "delete") {
+      return { error: `changes.md がこの ${/\.csproj$/i.test(vbproj) ? ".csproj" : ".vbproj"} を削除するため` };
+    }
     bytes = own.afterBytes;
   } else {
     const abs = join(root, vbproj);
@@ -213,9 +229,9 @@ export function formatVbprojPlan(plan: VbprojPlan): string[] {
       r.dependentUpon !== undefined ? `DependentUpon: ${r.dependentUpon}` : null,
     ].filter((x) => x !== null);
     lines.push(
-      `  vbproj に登録: ${r.vbproj} ← ${r.file}${extra.length > 0 ? ` (${extra.join(", ")})` : ""}`,
+      `  ${labelOfProject(r.vbproj)} に登録: ${r.vbproj} ← ${r.file}${extra.length > 0 ? ` (${extra.join(", ")})` : ""}`,
     );
   }
-  for (const n of plan.notes) lines.push(`  vbproj: ${n.file} — ${n.message}`);
+  for (const n of plan.notes) lines.push(`  ${n.label}: ${n.file} — ${n.message}`);
   return lines;
 }

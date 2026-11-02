@@ -167,6 +167,26 @@ describe("detectSubType / designerParentName / toIncludePath", () => {
     expect(detectSubType(["Public Class S", "End Class"])).toBeUndefined();
   });
 
+  it("C#: class X : Form / UserControl (完全修飾・global::・インターフェース併記・基底を次の行に書く形) を検出する", () => {
+    const cs = (...lines: string[]): string | undefined => detectSubType(lines, "cs");
+    expect(cs("namespace App", "{", "    public partial class OrderForm : Form", "    {")).toBe("Form");
+    expect(cs("public partial class F : System.Windows.Forms.Form, IDisposable")).toBe("Form");
+    expect(cs("internal sealed class C : global::System.Windows.Forms.UserControl { }")).toBe("UserControl");
+    expect(cs("public partial class F", "    : Form", "{")).toBe("Form");
+    expect(cs("public class S : BaseService")).toBeUndefined();
+    expect(cs("public class S : FormBase")).toBeUndefined();
+    expect(cs("public class S : MyForms.Form")).toBeUndefined();
+    expect(cs("public class S : Form<int>")).toBeUndefined();
+    // C# の言語の指定が無ければ VB として読む (Inherits の行が無いので該当なし)
+    expect(detectSubType(["public partial class F : Form"])).toBeUndefined();
+  });
+
+  it("X.Designer.cs → X.cs", () => {
+    expect(designerParentName("OrderForm.Designer.cs")).toBe("OrderForm.cs");
+    expect(designerParentName("OrderForm.designer.CS")).toBe("OrderForm.cs");
+    expect(designerParentName("OrderForm.cs")).toBeNull();
+  });
+
   it("X.Designer.vb → X.vb (大文字小文字を区別しない)", () => {
     expect(designerParentName("OrderForm.Designer.vb")).toBe("OrderForm.vb");
     expect(designerParentName("OrderForm.designer.VB")).toBe("OrderForm.vb");

@@ -77,6 +77,59 @@ suite("procedure: スナップショット", () => {
     });
   }
 
+  for (const mode of PROCEDURE_MODES) {
+    test(`${mode} モード(C# のプロジェクトだけ)がスナップショットと一致する`, () => {
+      assert.strictEqual(renderBuiltinProcedure(mode, { languages: ["cs"] }), fixture(`${mode}.cs.md`));
+    });
+    test(`${mode} モード(VB と C# の混在 + docs + 自動テスト)がスナップショットと一致する`, () => {
+      assert.strictEqual(
+        renderBuiltinProcedure(mode, { languages: ["vb", "cs"], docs: true, tests: true }),
+        fixture(`${mode}.vb-cs.md`),
+      );
+    });
+    test(`${mode} モード: Visual Basic だけ・言語の省略・空は C# 対応の前と同じ本文`, () => {
+      const plain = renderBuiltinProcedure(mode);
+      assert.strictEqual(renderBuiltinProcedure(mode, { languages: ["vb"] }), plain);
+      assert.strictEqual(renderBuiltinProcedure(mode, { languages: ["vb", "vb"] }), plain);
+      assert.strictEqual(renderBuiltinProcedure(mode, { languages: [] }), plain);
+      assert.ok(!plain.includes("C#"));
+      assert.ok(!plain.includes(".csproj"));
+    });
+    test(`${mode} モード: generic 構成は言語を見ない`, () => {
+      assert.strictEqual(
+        renderBuiltinProcedure(mode, { layout: "generic", languages: ["cs"] }),
+        renderBuiltinProcedure(mode, { layout: "generic" }),
+      );
+    });
+  }
+
+  test("C# の本文: Visual Basic 固有の語句が残らず、イベントの結び付けの置き場所を書く", () => {
+    for (const mode of PROCEDURE_MODES) {
+      const cs = renderBuiltinProcedure(mode, { languages: ["cs"] });
+      for (const phrase of ["VB.NET", "Visual Basic", "Designer.vb", ".vbproj", "Option Strict", "Handles"]) {
+        assert.ok(!cs.includes(phrase), `${mode}: C# の本文に「${phrase}」がある`);
+      }
+      assert.ok(cs.includes("InitializeComponent() の後に += で書き"));
+      assert.ok(cs.includes("結び付け済みのイベントを重ねて結び付けないでください"));
+      assert.ok(cs.startsWith(`<!-- tazuna procedure v${PROCEDURE_VERSION} (mode: ${mode}, language: C#) -->`));
+    }
+  });
+
+  test("VB と C# の混在: 両方の語句を併記する", () => {
+    const mixed = renderBuiltinProcedure("full", { languages: ["cs", "vb"] });
+    for (const phrase of [
+      "VB.NET / C#",
+      "Designer.vb / Designer.cs",
+      ".vbproj / .csproj",
+      "Option Strict",
+      "Nullable",
+      "Handles 句と +=",
+      "(mode: full, language: VB / C#)",
+    ]) {
+      assert.ok(mixed.includes(phrase), `混在の本文に「${phrase}」がない`);
+    }
+  });
+
   test("docs 連携なしの本文は docs あり本文の先頭部分と一致し、末尾に 2 節だけ足される", () => {
     for (const mode of PROCEDURE_MODES) {
       const plain = renderBuiltinProcedure(mode);

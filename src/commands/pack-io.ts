@@ -1,5 +1,5 @@
 /**
- * pack / build / init が共有するファイル I/O と、入力(.sln / .vbproj / generic 構成)とルートの決め方。
+ * pack / build / init が共有するファイル I/O と、入力(.sln / .vbproj / .csproj / generic 構成)とルートの決め方。
  * src/pack/ の解析コアは deps 注入で I/O を持たないため、実際のファイルシステムをここでつなぐ。
  */
 import { spawnSync } from "node:child_process";
@@ -166,11 +166,11 @@ export function printDiagnostics(label: string, diagnostics: ParseDiagnostic[]):
 export type TargetAndRoot =
   /** usageHint: 入力の指定の誤り(使い方の案内を添える) */
   | { kind: "error"; message: string; usageHint: boolean }
-  /** targetPath が undefined なら generic 構成(.sln / .vbproj を使わない) */
+  /** targetPath が undefined なら generic 構成(.sln / .vbproj / .csproj を使わない) */
   | { kind: "ok"; targetPath: string | undefined; rootDir: string };
 
 /**
- * 入力(.sln / .vbproj / ディレクトリ / 省略)とルートを決める(パックとビルドで同じ)。
+ * 入力(.sln / .vbproj / .csproj / ディレクトリ / 省略)とルートを決める(パックとビルドで同じ)。
  * solution: --root > 上位の設定ファイルの場所 > 上位の .git の場所 > 入力と同じ場所(rootResolver.ts)
  * generic: 設定ファイルの場所に固定(--root は使えない。基準が設定と食い違うため)
  */
@@ -180,6 +180,23 @@ function withConfigCheck(result: TargetAndRoot & { kind: "ok" }): TargetAndRoot 
     return { kind: "error", message: describeConfigConflict(result.rootDir), usageHint: false };
   }
   return result;
+}
+
+/**
+ * 入力(省略時は自動検出)の .sln / .vbproj / .csproj を、何も出力せずに求める(--print-procedure で
+ * プロジェクトの言語を知るため)。見つからない・generic 構成なら undefined
+ */
+export function findTargetQuietly(inputArg: string | undefined): string | undefined {
+  const resolution = resolveTarget(inputArg, process.cwd(), {
+    isDirectory: isDirectoryPath,
+    isFile: isFilePath,
+    listFileNames: FS_DEPS.listFileNames,
+    readConfigTarget: (directory) =>
+      loadSlnmixConfig(directory, { readTextFile: readSourceTextFile }).config.target,
+    isGenericConfig: (directory) =>
+      loadSlnmixConfig(directory, { readTextFile: readSourceTextFile }).config.kind === "generic",
+  });
+  return resolution.kind === "file" ? resolution.path : undefined;
 }
 
 export function resolveTargetAndRoot(
@@ -194,7 +211,7 @@ export function resolveTargetAndRoot(
     // 引数なし(またはディレクトリ指定)のとき、その場所の設定ファイルの target を使う
     readConfigTarget: (directory) =>
       loadSlnmixConfig(directory, { readTextFile: readSourceTextFile }).config.target,
-    // 同じ場所の設定が kind: "generic" なら .sln / .vbproj を探さない
+    // 同じ場所の設定が kind: "generic" なら .sln / .vbproj / .csproj を探さない
     isGenericConfig: (directory) =>
       loadSlnmixConfig(directory, { readTextFile: readSourceTextFile }).config.kind === "generic",
   });
@@ -217,7 +234,7 @@ export function resolveTargetAndRoot(
         usageHint: false,
       };
     }
-    err(`対象: generic 構成(${configName} の kind。.sln / .vbproj は使いません)`);
+    err(`対象: generic 構成(${configName} の kind。.sln / .vbproj / .csproj は使いません)`);
     err(`ルート: ${resolution.rootDir}`);
     return withConfigCheck({ kind: "ok", targetPath: undefined, rootDir: resolution.rootDir });
   }

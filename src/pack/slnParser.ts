@@ -2,13 +2,14 @@
  * .sln の最小解析(引き継ぎ仕様書 §18)。
  *
  * Project("{TYPE-GUID}") = "名前", "相対パス", "{GUID}" 行の抽出のみを行い、
- * 対象は .vbproj に限定する。Solution Folder・他言語プロジェクトは
+ * 対象は .vbproj と .csproj(.csproj は tazuna 0.17.0〜)に限定する。Solution Folder・他言語プロジェクトは
  * スキップして診断に残す。Global セクション等は読まない。
  * vscode モジュールに依存しない純粋関数(単体テスト対象)。
  */
 
 import * as path from "node:path";
 import { resolveWindowsPath } from "./paths.ts";
+import { PROJECT_FILE, projectFilesLabel, projectLanguageOf, type ProjectLanguage } from "./projectLanguage.ts";
 import type { ParseDiagnostic, SlnParseResult, SolutionProject } from "./types.ts";
 
 /** ファイルシステム依存の注入口(テストでは fake を渡す) */
@@ -16,7 +17,7 @@ export interface SlnParserDeps {
   fileExists(absolutePath: string): boolean;
   /**
    * ディレクトリ直下のファイル名一覧(取得できなければ undefined)。
-   * 省略時は「同フォルダの未参照 .vbproj」警告をスキップする。
+   * 省略時は「同フォルダの未参照 .vbproj / .csproj」警告をスキップする。
    */
   listFileNames?(absolutePath: string): string[] | undefined;
 }
@@ -68,10 +69,11 @@ export function parseSln(
       });
       continue;
     }
-    if (!/\.vbproj$/i.test(relativePath)) {
+    const language = projectLanguageOf(relativePath);
+    if (language === undefined) {
       diagnostics.push({
         severity: "info",
-        message: `.vbproj 以外のプロジェクトはスキップしました: "${name}"(${relativePath})`,
+        message: `.vbproj / .csproj 以外のプロジェクトはスキップしました: "${name}"(${relativePath})`,
       });
       continue;
     }
@@ -83,6 +85,7 @@ export function parseSln(
       absolutePath,
       projectGuid,
       projectTypeGuid,
+      language,
       exists: deps.fileExists(absolutePath),
     });
   }
@@ -90,7 +93,7 @@ export function parseSln(
   if (projects.length === 0) {
     diagnostics.push({
       severity: "warning",
-      message: "この .sln に VB プロジェクト(.vbproj)の定義が見つかりませんでした",
+      message: "この .sln に VB / C# のプロジェクト(.vbproj / .csproj)の定義が見つかりませんでした",
     });
   }
 
@@ -100,7 +103,7 @@ export function parseSln(
 }
 
 /**
- * .sln と同じフォルダにあるのに .sln から参照されていない .vbproj を警告する。
+ * .sln と同じフォルダにあるのに .sln から参照されていない .vbproj / .csproj を警告する。
  * プロジェクトの作り直しや VCS の部分コミットで .sln だけが古い場合、
  * その .vbproj が解析・エクスポート対象から漏れていることに気付けるようにする。
  */
@@ -119,18 +122,19 @@ function appendUnreferencedSiblingWarnings(
     projects.map((project) => project.absolutePath.toLowerCase()),
   );
   const unreferenced = names
-    .filter((name) => /\.vbproj$/i.test(name))
+    .filter((name) => PROJECT_FILE.test(name))
     .filter(
       (name) =>
         !referenced.has(resolveWindowsPath(name, solutionDir).toLowerCase()),
     )
     .sort((a, b) => a.localeCompare(b));
   for (const name of unreferenced) {
+    const label = projectFilesLabel([projectLanguageOf(name) as ProjectLanguage]);
     diagnostics.push({
       severity: "warning",
       message:
-        `同じフォルダに .sln から参照されていない .vbproj があります: ${name}` +
-        "(.sln が古いか別プロジェクトの可能性があります。こちらを対象にする場合は .vbproj を直接指定してください)",
+        `同じフォルダに .sln から参照されていない ${label} があります: ${name}` +
+        `(.sln が古いか別プロジェクトの可能性があります。こちらを対象にする場合は ${label} を直接指定してください)`,
     });
   }
 }

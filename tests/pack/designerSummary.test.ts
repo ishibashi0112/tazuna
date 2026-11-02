@@ -10,6 +10,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   type DesignerControl,
+  formatDesignerEvents,
+  parseDesignerCs,
   parseDesignerVb,
   renderDesignerControlLines,
 } from "../../src/pack/services/designerSummary.ts";
@@ -159,5 +161,83 @@ suite("designerSummary: 旧世代・エッジケース", () => {
   test("壊れた入力でも例外を投げない", () => {
     const summary = parseDesignerVb("Me.Controls.Add(Me.X\n<<<>>>\n");
     assert.strictEqual(summary.controlCount, 0);
+  });
+});
+
+suite("designerSummary: C# の Designer.cs(VS2013 世代。this. 付き)", () => {
+  const summary = parseDesignerCs(
+    fs.readFileSync(path.join(FIXTURES_ROOT, "csharp-legacy", "Forms", "OrderForm.Designer.cs"), "utf8"),
+  );
+
+  test("クラス名・フォームタイトル(\\\" のエスケープを戻す)・フォームのイベント", () => {
+    assert.strictEqual(summary.className, "OrderForm");
+    assert.strictEqual(summary.formText, '受注入力 "新規"');
+    assert.deepStrictEqual(summary.formEvents, [{ event: "Load", handler: "OrderForm_Load" }]);
+  });
+
+  test("components を除きコントロールを全件抽出し、Controls.Add / AddRange で入れ子にする", () => {
+    assert.strictEqual(summary.controlCount, 9);
+    const lines = renderDesignerControlLines(summary.rootControls);
+    assert.deepStrictEqual(lines, [
+      "- pnlHeader: Panel",
+      '  - lblCustomer: Label — Text "得意先"',
+      "  - txtCustomerName: TextBox — イベント Leave → txtCustomerName_Leave",
+      "- txtQuantity: TextBox",
+      '- btnSave: Button — Text "保存(&S)" — イベント Click → btnSave_Click',
+      "- mnuMain: MenuStrip",
+      '  - mnuFile: ToolStripMenuItem — Text "ファイル(&F)"',
+      '    - mnuFileExit: ToolStripMenuItem — Text "終了(&X)" — イベント Click → mnuFileExit_Click',
+      "- tmrAutoSave: Timer — イベント Tick → tmrAutoSave_Tick",
+    ]);
+  });
+});
+
+suite("designerSummary: C# の Designer.cs(.NET 8 世代。this. なし)", () => {
+  const summary = parseDesignerCs(
+    fs.readFileSync(path.join(FIXTURES_ROOT, "csharp-sdk", "MainForm.Designer.cs"), "utf8"),
+  );
+
+  test("this. の無い代入・+= メソッド名だけのイベント・逐語的文字列(@\"...\")を読む", () => {
+    assert.strictEqual(summary.className, "MainForm");
+    assert.strictEqual(summary.formText, "単価計算");
+    assert.deepStrictEqual(summary.formEvents, [{ event: "Load", handler: "MainForm_Load" }]);
+    assert.deepStrictEqual(renderDesignerControlLines(summary.rootControls), [
+      '- lblResult: Label — Text "結果: "未計算""',
+      '- grpInput: GroupBox — Text "入力"',
+      "  - txtPrice: TextBox",
+      '  - btnCalc: Button — Text "計算" — イベント Click → btnCalc_Click',
+    ]);
+  });
+});
+
+suite("designerSummary: C# のエッジケース", () => {
+  test("イベントの書き方の違い(new EventHandler・ラムダは拾わない)と、宣言の無い名前は無視する", () => {
+    const summary = parseDesignerCs(
+      [
+        "partial class F",
+        "{",
+        "    private void InitializeComponent()",
+        "    {",
+        "        this.a = new System.Windows.Forms.Button();",
+        "        this.a.Click += new System.EventHandler(this.a_Click);",
+        "        this.a.Enter += a_Enter;",
+        "        this.a.Leave += (s, e) => { };",
+        "        this.unknown.Click += new System.EventHandler(this.x_Click);",
+        "        this.Controls.Add(this.a);",
+        "    }",
+        "    private System.Windows.Forms.Button a;",
+        "}",
+      ].join("\n"),
+    );
+    assert.strictEqual(summary.controlCount, 1);
+    assert.strictEqual(
+      formatDesignerEvents(summary.rootControls[0]?.events ?? []),
+      "Click → a_Click, Enter → a_Enter",
+    );
+  });
+
+  test("コントロール宣言がなければ controlCount = 0、壊れた入力でも例外を投げない", () => {
+    assert.strictEqual(parseDesignerCs("namespace X { class Y { } }").controlCount, 0);
+    assert.strictEqual(parseDesignerCs("this.Controls.Add(\n<<<>>>\n((((").controlCount, 0);
   });
 });

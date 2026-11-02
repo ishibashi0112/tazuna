@@ -1,5 +1,6 @@
 /**
- * 旧スタイル .vbproj への Compile 項目登録 (設計書 §11.1 P1-a)。
+ * 旧スタイル .vbproj への Compile 項目登録 (設計書 §11.1 P1-a)。旧スタイル .csproj (C#) も同じ形式のため
+ * 同じ処理で登録する (tazuna 0.17.0)。
  *
  * 旧スタイル .vbproj は <Compile Include> に載っていないファイルをコンパイルしない。
  * AI にこれをやらせるとパックに .vbproj 本体がなく SEARCH が一致しないため、
@@ -232,8 +233,22 @@ export function applyInsertion(
 const RE_INHERITS =
   /^\s*Inherits\s+(?:(?:System\.)?Windows\.Forms\.)?(Form|UserControl)\s*(?:'.*)?$/i;
 
-/** 新規 .vb の内容から <SubType> を推定する (Inherits Form / UserControl)。該当なしは undefined */
-export function detectSubType(contentLines: readonly string[]): string | undefined {
+/**
+ * C# のクラス宣言の基底が Form / UserControl か (`partial class X : Form`、`: System.Windows.Forms.UserControl, IFoo`)。
+ * 基底を次の行に書く形もあるため、行をまたいで探す。C# は大文字小文字を区別する
+ */
+const RE_CS_FORM_BASE =
+  /\bclass\s+[A-Za-z_]\w*(?:\s*<[^>]*>)?\s*:\s*(?:global::)?(?:(?:System\.)?Windows\.Forms\.)?(Form|UserControl)\b(?!\s*[.<])/;
+
+/**
+ * 新規 .vb / .cs の内容から <SubType> を推定する (VB: Inherits Form / UserControl、
+ * C#: class X : Form / UserControl)。該当なしは undefined
+ */
+export function detectSubType(contentLines: readonly string[], language: "vb" | "cs" = "vb"): string | undefined {
+  if (language === "cs") {
+    const m = RE_CS_FORM_BASE.exec(contentLines.join("\n"));
+    return m === null ? undefined : (m[1] as string);
+  }
   for (const line of contentLines) {
     const m = RE_INHERITS.exec(line);
     if (m === null) continue;
@@ -243,10 +258,13 @@ export function detectSubType(contentLines: readonly string[]): string | undefin
   return undefined;
 }
 
-/** `X.Designer.vb` なら親ファイル名 `X.vb` を返す (大文字小文字は区別しない)。それ以外は null */
+/**
+ * `X.Designer.vb` なら親ファイル名 `X.vb`、`X.Designer.cs` なら `X.cs` を返す (大文字小文字は区別しない)。
+ * それ以外は null
+ */
 export function designerParentName(fileName: string): string | null {
-  const m = /^(.+)\.designer\.vb$/i.exec(fileName);
-  return m === null ? null : `${m[1] as string}.vb`;
+  const m = /^(.+)\.designer\.(vb|cs)$/i.exec(fileName);
+  return m === null ? null : `${m[1] as string}.${(m[2] as string).toLowerCase()}`;
 }
 
 /** ルート相対パス (/ 区切り) を .vbproj のディレクトリからの相対 Include (\ 区切り) にする */

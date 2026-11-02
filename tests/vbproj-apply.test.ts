@@ -6,7 +6,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { applyCommand } from "../src/commands/apply.ts";
 import { undoCommand } from "../src/commands/undo.ts";
 import { sjisEncode } from "../src/core/sjis.ts";
@@ -330,6 +330,165 @@ describe("apply: 新規ファイルの形式推定 newFile.encoding auto (§11.2
     expect(await apply(dir, CREATE_SERVICE)).toBe(0);
     expect(new Uint8Array(readFileSync(join(dir, "App", "Services", "OrderService.vb")))).toEqual(
       utf8("' 受注サービス\nPublic Class OrderService\nEnd Class\n"),
+    );
+  });
+});
+
+describe("apply: C# の旧スタイル .csproj への自動登録 (0.17.0)", () => {
+  /** VS2013 の C# の既定: UTF-8 (BOM あり) + CRLF */
+  const CSPROJ_LINES = [
+    '<?xml version="1.0" encoding="utf-8"?>',
+    '<Project ToolsVersion="12.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">',
+    "  <ItemGroup>",
+    '    <Reference Include="System" />',
+    "  </ItemGroup>",
+    "  <ItemGroup>",
+    '    <Compile Include="Program.cs" />',
+    "  </ItemGroup>",
+    '  <Import Project="$(MSBuildToolsPath)\\Microsoft.CSharp.targets" />',
+    "</Project>",
+    "",
+  ];
+  const CSPROJ = new Uint8Array([...BOM, ...utf8(CSPROJ_LINES.join("\r\n"))]);
+
+  function setupCs(config: Record<string, unknown> = {}): string {
+    const dir = setup(config);
+    mkdirSync(join(dir, "Cs", "Forms"), { recursive: true });
+    writeFileSync(join(dir, "Cs", "Cs.csproj"), CSPROJ);
+    writeFileSync(join(dir, "Cs", "Program.cs"), new Uint8Array([...BOM, ...utf8("// 既存\r\nstatic class Program { }\r\n")]));
+    return dir;
+  }
+
+  const CREATE_FORM = doc(
+    "## CHANGES",
+    "",
+    "フォーム追加。",
+    "",
+    "### FILE: Cs/Forms/CustomerForm.Designer.cs (create)",
+    "<<<<<<< CONTENT",
+    "namespace Cs.Forms",
+    "{",
+    "    partial class CustomerForm",
+    "    {",
+    "    }",
+    "}",
+    ">>>>>>> END",
+    "",
+    "### FILE: Cs/Forms/CustomerForm.cs (create)",
+    "<<<<<<< CONTENT",
+    "using System.Windows.Forms;",
+    "",
+    "namespace Cs.Forms",
+    "{",
+    "    // 得意先の入力",
+    "    public partial class CustomerForm : Form",
+    "    {",
+    "    }",
+    "}",
+    ">>>>>>> END",
+  );
+
+  it(".cs を最寄りの .csproj に登録し (Form には SubType、Designer.cs には DependentUpon)、他の行は変えない", async () => {
+    const dir = setupCs({ newFile: { encoding: "auto" } });
+    let stdout = "";
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      stdout += String(chunk);
+      return true;
+    });
+    try {
+      expect(await apply(dir, CREATE_FORM)).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+    const expected = [...CSPROJ_LINES];
+    expected.splice(
+      7,
+      0,
+      '    <Compile Include="Forms\\CustomerForm.cs">',
+      "      <SubType>Form</SubType>",
+      "    </Compile>",
+      '    <Compile Include="Forms\\CustomerForm.Designer.cs">',
+      "      <DependentUpon>CustomerForm.cs</DependentUpon>",
+      "    </Compile>",
+    );
+    expect(new Uint8Array(readFileSync(join(dir, "Cs", "Cs.csproj")))).toEqual(
+      new Uint8Array([...BOM, ...utf8(expected.join("\r\n"))]),
+    );
+    // 新規 .cs は手本 (上位の Cs/ の .cs: UTF-8 BOM あり / CRLF) に合わせる
+    expect(new Uint8Array(readFileSync(join(dir, "Cs", "Forms", "CustomerForm.cs"))).slice(0, 3)).toEqual(
+      new Uint8Array(BOM),
+    );
+    expect(readFileSync(join(dir, "Cs", "Forms", "CustomerForm.cs"), "utf8")).toContain("// 得意先の入力\r\n");
+    expect(stdout).toContain("csproj に登録: Cs/Cs.csproj ← Cs/Forms/CustomerForm.cs (SubType: Form)");
+    const entry = manifestOf(dir).files.find((f) => f.path === "Cs/Cs.csproj");
+    expect(entry?.op).toBe("vbproj");
+    expect(entry?.registered).toEqual(["Cs/Forms/CustomerForm.cs", "Cs/Forms/CustomerForm.Designer.cs"]);
+    // undo で戻る
+    expect(await undoCommand(["--root", dir, "--yes"])).toBe(0);
+    expect(new Uint8Array(readFileSync(join(dir, "Cs", "Cs.csproj")))).toEqual(CSPROJ);
+  });
+
+  it("SDK スタイルの .csproj には登録しない。最寄りのプロジェクトが .vbproj の .cs は登録しない", async () => {
+    const dir = setupCs();
+    mkdirSync(join(dir, "Sdk"), { recursive: true });
+    const sdk = utf8('<Project Sdk="Microsoft.NET.Sdk">\n</Project>\n');
+    writeFileSync(join(dir, "Sdk", "Sdk.csproj"), sdk);
+    const changes = doc(
+      "## CHANGES",
+      "",
+      "テスト。",
+      "",
+      "### FILE: Sdk/Api.cs (create)",
+      "<<<<<<< CONTENT",
+      "public class Api { }",
+      ">>>>>>> END",
+      "",
+      "### FILE: App/Services/Wrong.cs (create)",
+      "<<<<<<< CONTENT",
+      "public class Wrong { }",
+      ">>>>>>> END",
+    );
+    let stdout = "";
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      stdout += String(chunk);
+      return true;
+    });
+    try {
+      expect(await apply(dir, changes)).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(new Uint8Array(readFileSync(join(dir, "Sdk", "Sdk.csproj")))).toEqual(sdk);
+    expect(new Uint8Array(readFileSync(join(dir, "App", "App.vbproj")))).toEqual(VBPROJ);
+    expect(stdout).toContain("csproj: Sdk/Api.cs — Sdk/Sdk.csproj は SDK スタイルのため登録不要");
+    expect(stdout).toContain("csproj: App/Services/Wrong.cs — 最寄りのプロジェクト App/App.vbproj は .csproj ではないため未登録");
+    expect(manifestOf(dir).files.some((f) => f.op === "vbproj")).toBe(false);
+  });
+
+  it("同じディレクトリに .vbproj と .csproj があれば、.vb は .vbproj・.cs は .csproj に登録する", async () => {
+    const dir = setupCs();
+    writeFileSync(join(dir, "Cs", "Vb.vbproj"), VBPROJ);
+    const changes = doc(
+      "## CHANGES",
+      "",
+      "テスト。",
+      "",
+      "### FILE: Cs/A.cs (create)",
+      "<<<<<<< CONTENT",
+      "public class A { }",
+      ">>>>>>> END",
+      "",
+      "### FILE: Cs/B.vb (create)",
+      "<<<<<<< CONTENT",
+      "Public Class B",
+      "End Class",
+      ">>>>>>> END",
+    );
+    expect(await apply(dir, changes)).toBe(0);
+    expect(readFileSync(join(dir, "Cs", "Cs.csproj"), "utf8")).toContain('<Compile Include="A.cs" />');
+    expect(readFileSync(join(dir, "Cs", "Cs.csproj"), "utf8")).not.toContain("B.vb");
+    expect(new TextDecoder("shift_jis").decode(readFileSync(join(dir, "Cs", "Vb.vbproj")))).toContain(
+      '<Compile Include="B.vb" />',
     );
   });
 });

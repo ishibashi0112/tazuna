@@ -1,7 +1,7 @@
 # tazuna pack — パックの詳細
 
 `tazuna pack` は、プロジェクトのソースを Repomix 互換フォーマットの 1 ファイル(パック)にまとめ、
-AI チャットに貼る本文用テキストと一緒に出します。レガシー Visual Studio(`.sln` / `.vbproj`)は
+AI チャットに貼る本文用テキストと一緒に出します。レガシー Visual Studio(`.sln` / `.vbproj` / `.csproj`)は
 **ビルド対象の論理構成**で、それ以外の言語は git が管理しているファイルでまとめます。
 
 0.15.0 より前は slnmix という別のパッケージでした(変更を当てる側の petari と 1 つにして tazuna に改名。
@@ -54,7 +54,9 @@ DependentUpon 解決済み)に基づいてエクスポートします。
 - **プロジェクト文書の連携**(`docs/`): 設計書・仕様書・引継ぎ書をパックの `<docs>` と
   本文用テキストに自動で載せ、文書の状態から作業モード(設計 / 実装 / 続き)を
   自動で決める。文書の更新は AI が changes.md で出し `npx tazuna` が保存する(下記)
-- VB.NET 以外(TypeScript・Python・C# など)は、git が管理しているファイルを既定でまとめる(下記)
+- C# の `.csproj` も同じ論理構成で扱う(0.17.0。旧スタイル / SDK スタイル・Designer.cs の UI サマリー・
+  C# の版の `<environment>`。下記「C# のプロジェクト」)
+- `.sln` の無いプロジェクト(TypeScript・Python・Go など)は、git が管理しているファイルを既定でまとめる(下記)
 - 出力は BOM 付き UTF-8(Windows 系ツールの誤判定防止)
 
 ## 導入の審査(情報システム部門向け)
@@ -314,7 +316,7 @@ types:
 
 ## VB.NET 以外のプロジェクト(`kind: "generic"`)
 
-`.sln` / `.vbproj` の無いプロジェクト(TypeScript・Python・C#・Go など)でも、
+`.sln` / `.vbproj` / `.csproj` の無いプロジェクト(TypeScript・Python・Go など)でも、
 同じパックと本文用テキスト(`.prompt.md`)が作れます。本家 repomix との違いは
 **手順文・規約文をチャット本文に貼る形で出す**ことです。M365 Copilot Chat は
 添付ファイル内の指示を無視するため、repomix の `instructionFilePath` で末尾に
@@ -371,6 +373,35 @@ git のリポジトリでない場所では `extraRoots` が必要で、`init` �
   そのまま使えます
 - `.sln` / `.vbproj` を引数で明示したときは設定の `kind` に関わらず従来どおり
   論理構成で出力します(警告を表示)
+
+## C# のプロジェクト(`.csproj`。0.17.0〜)
+
+`.sln` に C# のプロジェクト(`.csproj`)があれば、VB と同じく論理構成に入れます(0.16.x までは `.vbproj` 以外を
+スキップしていました)。VB と C# が混ざった `.sln` もそのまま扱えます。`.csproj` を直接指定する・`.sln` の無い
+フォルダで `.csproj` を自動検出することもできます。F# など他の言語のプロジェクトは従来どおりスキップします。
+
+- 旧スタイル(`ToolsVersion` 付き・`<Compile Include>` を列挙)も SDK スタイル(既定の Compile グロブ
+  `**/*.cs` を展開。下記「SDK スタイル .vbproj」と同じ規則)も読みます
+- `*.Designer.cs`(フォーム・Resources・Settings)は Designer 関連として除き、フォームの `Designer.cs` は
+  **UI サマリー**にします。C# の WinForms はイベントの結び付け(`this.btnSave.Click += ...`)が Designer.cs にあり、
+  VB の `Handles` 句のように本体のコードから見えないため、C# の UI サマリーには結び付け済みのイベントとハンドラーも
+  載せます(`- btnSave: Button — Text "保存" — イベント Click → btnSave_Click`、`フォームのイベント: Load → OrderForm_Load`)。
+  Visual Studio 2013 世代の `this.` 付きの書き方と、.NET 6 以降の `this.` の無い書き方の両方を読みます
+- `<environment>` には C# の版を書きます。`LangVersion` があればその版、無ければ旧スタイルは `ToolsVersion` の
+  Visual Studio の既定(12.0 → C# 5、14.0 → C# 6 など)、SDK スタイルはターゲット フレームワークの既定
+  (`net8.0` → C# 12、`net48` → 7.3 など)と「みなす」と明記して、使えない構文を挙げます。`Nullable`・
+  `ImplicitUsings`・`<Using>`(プロジェクト全体の using)も載せます
+- 認証情報の自動マスクは C# の字句を読みます(文字列・コメントの中だけを伏せる)
+- 手順文(`<procedure>`)は C# の語句になります(Designer.cs・`.csproj`・`Nullable`・イベントを新しく結び付けるときは
+  コンストラクターの `InitializeComponent()` の後に `+=` で書き、結び付け済みのものを重ねない)。先頭行に
+  `language: C#`(VB と C# の混在なら `language: VB / C#`)が付きます。VB だけの `.sln` の手順文は
+  0.16.x と同じです(版数の行だけ)
+- 変更を当てるときは、`create` した `.cs` を最寄りの旧スタイル `.csproj` に登録します(README の「新規 .vb / .cs
+  ファイルの作成」)
+- 混在の `.sln` で C# のプロジェクトをパックに入れたくないときは、`.repomixignore` にそのフォルダを書いてください
+
+C# のサンプル(`tests/fixtures/pack/csharp-legacy/`・`csharp-sdk/`・`mixed/`)での確認のみで、実際の C# の
+プロジェクトでの運用実績はまだありません(Visual Studio / dotnet でのビルドも未確認)。
 
 ## SDK スタイル .vbproj
 

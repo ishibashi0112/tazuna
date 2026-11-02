@@ -15,8 +15,9 @@ tazuna では AI はあなたの PC に一切触れません。コードを渡�
    `.tazuna/history/` に自動保存される
 3. **直す** (`tazuna build`): MSBuild でビルドし、失敗したらエラーと今のファイルの周辺行をクリップボードへ入れる
 
-レガシー VB.NET (`.sln` / `.vbproj`、Shift_JIS) を出発点にしていますが、TypeScript・Python・C#・Go などの
-プロジェクトでも使えます (git が管理しているファイルをまとめる)。実行時依存はゼロで、通信もしません
+レガシー VB.NET (`.sln` / `.vbproj`、Shift_JIS) を出発点にしていますが、C# の `.csproj` も同じように
+`.sln` の構成で扱えます (0.17.0。旧スタイル / SDK スタイル、WinForms の Designer.cs の要約)。TypeScript・Python・
+Go などのプロジェクトでも使えます (git が管理しているファイルをまとめる)。実行時依存はゼロで、通信もしません
 (導入審査向けの説明は [docs/SECURITY-REVIEW.md](docs/SECURITY-REVIEW.md))。
 
 0.15.0 で、変更を当てる側だった petari と、パックを作る側だった [slnmix](https://www.npmjs.com/package/slnmix) を
@@ -39,7 +40,7 @@ npx tazuna pack          # パックを作り、Copilot Chat に貼るものを�
                          # → AI から changes.md をダウンロード
 npx tazuna               # Downloads の changes.md を自動検出して適用
 git diff                 # VS Code で差分レビュー・手修正
-npx tazuna build         # (VB.NET) ビルドし、失敗ならエラーと周辺のコードをクリップボードへ → チャットに貼る
+npx tazuna build         # (VB.NET / C#) ビルドし、失敗ならエラーと周辺のコードをクリップボードへ → チャットに貼る
 npx tazuna undo          # 直近の適用を巻き戻す
 ```
 
@@ -86,24 +87,26 @@ RDP 越しに受け渡す運用では従来どおり `tazuna` / `tazuna --clip` 
 - `npx petari` と `npx slnmix` もしばらくは動きます (tazuna を呼ぶだけの互換パッケージ。実行のたびに
   移行を知らせる 1 行が出ます)
 
-### レガシー VB.NET プロジェクトでの適用
+### レガシー VB.NET / C# プロジェクトでの適用
 
-#### 新規 .vb ファイルの作成
+#### 新規 .vb / .cs ファイルの作成
 
-AI が `create` で `.vb` を新規作成すると、tazuna が次を自動で行います (Visual Studio での
+AI が `create` で `.vb` / `.cs` を新規作成すると、tazuna が次を自動で行います (Visual Studio での
 手作業をなくすため)。いずれも失敗しても create 自体は成功し、理由を結果表示に出します。
 
-- **旧スタイル .vbproj への登録**: 作成先から上へ辿って最寄りの `.vbproj` を探し、
-  `<Compile Include="...">` を追加します (`Inherits Form` なら `<SubType>Form</SubType>`、
-  `X.Designer.vb` なら `<DependentUpon>X.vb</DependentUpon>` 付き)。追加行以外のバイト列は
-  変えません (Shift_JIS / CRLF / BOM そのまま)。SDK スタイルの `.vbproj` は登録不要のため
+- **旧スタイル .vbproj / .csproj への登録**: 作成先から上へ辿って最寄りのプロジェクトファイルを探し
+  (`.vb` は `.vbproj`、`.cs` は `.csproj`。最寄りのプロジェクトが別の言語なら登録しません)、
+  `<Compile Include="...">` を追加します (`Inherits Form` / `class X : Form` なら `<SubType>Form</SubType>`、
+  `X.Designer.vb` / `X.Designer.cs` なら `<DependentUpon>X.vb</DependentUpon>` などが付きます)。追加行以外のバイト列は
+  変えません (Shift_JIS / CRLF / BOM そのまま)。SDK スタイルのプロジェクトは登録不要のため
   触りません。登録は履歴に含まれ `tazuna undo` で戻ります。無効化は `--no-vbproj` か
   `.tazuna/config.json` (旧版から使っているリポジトリでは `.petari/config.json`。以下同じ) の
-  `"vbproj": { "register": false }`
+  `"vbproj": { "register": false }` (名前は vbproj のままで、.csproj への登録も止まります)
 - **エンコーディングの推定**: `.tazuna/config.json` の `"newFile": { "encoding": "auto" }`
   (`tazuna init` の雛形の既定) で、同じディレクトリの既存ファイルの多数決で
   文字コード / BOM / 改行を決めます。`.vb` を BOM なし UTF-8 で作ることはありません
-  (vbc / VS で日本語が化けるため)。従来どおり `"utf8"` / `"shift_jis"` の明示指定も使えます
+  (vbc / VS で日本語が化けるため)。手本が無いときの `.vb` / `.cs` は Visual Studio と同じ UTF-8 (BOM あり) / CRLF です。
+  従来どおり `"utf8"` / `"shift_jis"` の明示指定も使えます
 
 ### 適用が繰り返し失敗するとき
 
@@ -135,7 +138,7 @@ repomix の出力) が実ファイルとずれている**可能性が高いで�
 
 適用の主なオプション: `--dry-run` (検証と差分プレビューのみ) / `--partial` (成功分のみ適用) /
 `--root <dir>` / `--yes` / `--clip-report` (失敗レポートをクリップボードへ。v0.5.0 から既定で自動コピーされるため、config で無効化した場合の個別指定用) /
-`--no-vbproj` (create した .vb の .vbproj 自動登録を今回だけ無効化) /
+`--no-vbproj` (create した .vb / .cs の .vbproj / .csproj 自動登録を今回だけ無効化) /
 `--force` (適用済みの changes.md でも再適用する。下記「二重適用の防止」を今回だけ解除) /
 `--literal-masked` (元の値に戻せない `[MASKED]` をその文字のまま書く。伏せ字を扱うコードそのものを書くとき用。下記「伏せ字 [MASKED] の扱い」)
 

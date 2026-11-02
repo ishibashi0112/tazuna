@@ -184,3 +184,57 @@ describe("tazuna pack: generic 構成で extraRoots が無ければ git が管�
     expect(result.stderr).toContain("extraRoots");
   });
 });
+
+describe("tazuna pack: C# の .csproj (0.17.0)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** .git のあるリポジトリに mixed (VB 1 + C# 2 + F# 1) と参照先のフィクスチャを置く */
+  function mixedRepo(): string {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "tazuna-pack-cs-")));
+    mkdirSync(join(dir, ".git"));
+    for (const name of ["mixed", "basic", "csharp-legacy", "csharp-sdk"]) {
+      cpSync(resolve(import.meta.dirname, "fixtures", "pack", name), join(dir, name), { recursive: true });
+    }
+    return dir;
+  }
+
+  it("VB と C# のプロジェクトを論理構成に入れ、Designer.cs は要約、bin / obj は入れない", () => {
+    const dir = mixedRepo();
+    const result = run(["mixed/Mixed.sln", "--stdout", "--no-clip"], dir);
+    expect(result.code).toBe(0);
+    const out = result.stdout;
+    expect(out).toContain("論理構成(.sln / .vbproj / .csproj)");
+    expect(out).toContain('<file path="basic/Module1.vb"');
+    expect(out).toContain('<file path="csharp-legacy/Forms/OrderForm.cs" project="LegacyApp"');
+    expect(out).toContain('<file path="csharp-sdk/Services/PriceService.cs" project="SdkApp"');
+    expect(out).not.toContain('<file path="csharp-legacy/Forms/OrderForm.Designer.cs"');
+    expect(out).not.toContain("csharp-sdk/bin/");
+    expect(out).not.toContain("csharp-sdk/obj/");
+    expect(out).toContain('<ui_summary path="csharp-legacy/Forms/OrderForm.Designer.cs" form="OrderForm">');
+    expect(out).toContain('- btnSave: Button — Text "保存(&S)" — イベント Click → btnSave_Click');
+    expect(out).toContain("フォームのイベント: Load → OrderForm_Load");
+    expect(out).toContain("既定の Compile グロブ(**/*.cs)を展開した");
+    // C# のソースも伏せる
+    expect(out).toContain("Password=[MASKED]");
+    expect(out).not.toContain("Tz9qLm2Xv7Rk");
+    // ビルド環境と手順文
+    expect(out).toContain(".vbproj / .csproj から読み取ったビルド環境");
+    expect(out).toContain("  - C#: 5 まで(");
+    expect(out).toContain("  - C#: 12 まで(");
+    expect(out).toContain("(mode: full, language: VB / C#)");
+  });
+
+  it("C# だけのプロジェクトは手順文が C# の語句になる。--print-procedure も同じ", () => {
+    const dir = mixedRepo();
+    const result = run(["--stdout", "--no-clip"], join(dir, "csharp-sdk"));
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("(mode: full, language: C#)");
+    expect(result.stdout).toContain("<ui_summary> は Designer.cs からの要約です");
+    expect(result.stdout).not.toContain("Designer.vb");
+    const printed = run(["--print-procedure"], join(dir, "csharp-legacy"));
+    expect(printed.stdout).toMatch(/^<!-- tazuna procedure v\d+ \(mode: full, language: C#\) -->/);
+    // 入力が見つからないところでは従来どおり Visual Basic の文面
+    const none = run(["--print-procedure"], dir);
+    expect(none.stdout).toMatch(/^<!-- tazuna procedure v\d+ \(mode: full\) -->/);
+  });
+});

@@ -464,3 +464,69 @@ suite("vbprojParser: 旧スタイルは SDK 対応の影響を受けない", () 
     assert.ok(!result.diagnostics.some((d) => d.message.includes("Include 属性のない")));
   });
 });
+
+// ---------------------------------------------------------------------------
+// C# の .csproj(tazuna 0.17.0〜)
+// ---------------------------------------------------------------------------
+
+suite("vbprojParser: C# の旧スタイル .csproj(csharp-legacy fixture)", () => {
+  const result = parseFixture("csharp-legacy/LegacyApp.csproj");
+
+  test("言語は cs。形式は旧スタイル", () => {
+    assert.strictEqual(result.language, "cs");
+    assert.strictEqual(result.projectStyle, "legacy");
+    assert.strictEqual(result.defaultCompileGlobExpanded, false);
+  });
+
+  test("Compile / None / EmbeddedResource を抽出し、Designer.cs・resx・Settings は Designer 関連にする", () => {
+    const sensitive = result.items.filter((item) => item.isSensitive).map((item) => item.include).sort();
+    assert.ok(sensitive.includes("Forms\\OrderForm.Designer.cs"));
+    assert.ok(sensitive.includes("Properties\\Resources.Designer.cs"));
+    assert.ok(sensitive.includes("Properties\\Settings.Designer.cs"));
+    assert.ok(!sensitive.includes("Forms\\OrderForm.cs"));
+    assert.strictEqual(findItem(result, "Forms\\OrderForm.cs").subType, "Form");
+    assert.strictEqual(findItem(result, "Forms\\OrderForm.Designer.cs").dependentUpon, "OrderForm.cs");
+    assert.ok(result.items.filter((item) => item.kind === "Compile").every((item) => item.exists));
+  });
+});
+
+suite("vbprojParser: C# の SDK スタイル .csproj(csharp-sdk fixture)", () => {
+  const result = parseFixture("csharp-sdk/SdkApp.csproj");
+
+  test("既定の Compile グロブ **/*.cs を展開し、bin / obj は入れない", () => {
+    assert.strictEqual(result.language, "cs");
+    assert.strictEqual(result.projectStyle, "sdk");
+    assert.strictEqual(result.defaultCompileGlobExpanded, true);
+    assert.ok(result.diagnostics.some((d) => d.message.includes("既定の Compile グロブ(**/*.cs)を展開しました")));
+    const includes = result.items.filter((item) => item.kind === "Compile").map((item) => item.include).sort();
+    assert.deepStrictEqual(includes, [
+      "MainForm.Designer.cs",
+      "MainForm.cs",
+      "Program.cs",
+      "Services\\PriceService.cs",
+    ]);
+    assert.ok(findItem(result, "MainForm.Designer.cs").isSensitive);
+  });
+
+  test("Nullable・ImplicitUsings・<Using> を environment に読む(<Import> は読まない)", () => {
+    const environment = result.environment;
+    assert.ok(environment !== undefined);
+    assert.deepStrictEqual(environment.nullable, ["enable"]);
+    assert.deepStrictEqual(environment.implicitUsings, ["enable"]);
+    assert.deepStrictEqual(environment.imports, [
+      "System.Data",
+      "static SdkApp.Services.PriceService",
+      "Json = System.Text.Json",
+    ]);
+  });
+
+  test(".vb は C# の既定グロブに入らず、.cs は VB の既定グロブに入らない", () => {
+    const csDir = path.join(FIXTURES_ROOT, "virtual");
+    const deps = fakeSdkDeps(csDir, ["A.cs", "B.vb"]);
+    const cs = parseVbproj('<Project Sdk="Microsoft.NET.Sdk"></Project>', path.join(csDir, "X.csproj"), deps);
+    assert.deepStrictEqual(cs.items.map((item) => item.include), ["A.cs"]);
+    const vb = parseVbproj('<Project Sdk="Microsoft.NET.Sdk"></Project>', path.join(csDir, "X.vbproj"), deps);
+    assert.deepStrictEqual(vb.items.map((item) => item.include), ["B.vb"]);
+    assert.strictEqual(vb.language, "vb");
+  });
+});

@@ -31,6 +31,21 @@ suite("parseMsbuildErrors", () => {
     ]);
   });
 
+  test("csc のエラー(CS の番号)も取り出す", () => {
+    const log =
+      "C:\\src\\Cs\\Forms\\OrderForm.cs(12,9): error CS0103: 現在のコンテキストに 'txtFoo' という名前は存在しません。 [C:\\src\\Cs\\Cs.csproj]";
+    assert.deepStrictEqual(parseMsbuildErrors(log), [
+      {
+        origin: "C:\\src\\Cs\\Forms\\OrderForm.cs",
+        line: 12,
+        column: 9,
+        code: "CS0103",
+        message: "現在のコンテキストに 'txtFoo' という名前は存在しません。",
+        project: "C:\\src\\Cs\\Cs.csproj",
+      },
+    ]);
+  });
+
   test("ノード番号の接頭辞・行だけの位置・ツール名のエラーも取り出し、警告と重複は除く", () => {
     const log = [
       "  1>C:\\src\\App\\Module1.vb(7) : error BC30205: ステートメントの終わりを指定してください。 [C:\\src\\App\\App.vbproj]",
@@ -155,6 +170,26 @@ suite("buildErrorReport", () => {
       mask: { strict: true },
     });
     assert.ok(!tail.includes("p@ss"), tail);
+  });
+
+  test(".cs の抜粋は csharp のコードブロックにし、C# のソースとして伏せる", () => {
+    const repo = [
+      "class Repo",
+      "{",
+      '    private const string Conn = "User Id=sales;Password=Tz9qLm2Xv7Rk;";',
+      "    void Save() { Opn(Conn); }",
+      "}",
+    ];
+    const read = (p: string): string[] | undefined => (p === "C:\\src\\Repo.cs" ? repo : undefined);
+    const report = buildErrorReport(
+      [{ origin: "C:\\src\\Repo.cs", line: 4, code: "CS0103", message: "現在のコンテキストに 'Opn' という名前は存在しません。" }],
+      "",
+      { rootDir: "C:\\src", readLines: read, contextLines: 2, mask: { strict: true } },
+    );
+    assert.ok(report.includes("```csharp\n"), report);
+    assert.ok(!report.includes("Tz9qLm2Xv7Rk"), report);
+    assert.ok(report.includes("Password=[MASKED]"), report);
+    assert.ok(report.includes("> 4 │    void Save() { Opn(Conn); }"), report);
   });
 
   test("ファイル名のないエラーの発生元も伏せる", () => {

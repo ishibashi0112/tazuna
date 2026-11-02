@@ -1,9 +1,9 @@
 /**
- * tazuna pack --init-config: VB.NET 以外のプロジェクト(TypeScript 等)で使う
+ * tazuna pack --init-config: .sln の無いプロジェクト(TypeScript 等)で使う
  * ための設定ファイル(tazuna.config.json、kind: "generic")を作る(旧 slnmix v0.17.0、設計書 §19)。
  *
  * - 既に設定ファイルがあれば(旧名の slnmix.config.json でも)何もしない(冪等。中身は変えない)
- * - その場所に .sln / .vbproj があれば作らない(従来の solution 構成で動くため)
+ * - その場所に .sln / .vbproj / .csproj があれば作らない(従来の solution 構成で動くため)
  * - git のリポジトリの中なら extraRoots を書かない(git が管理しているファイルが対象。設計書 §25.7)
  * - git の外では、ソースのディレクトリは「候補名のうち実在するもの」だけを採用する(src / app /
  *   lib / apps / packages → kind: "src"、tests / test / e2e / __tests__ →
@@ -79,12 +79,12 @@ export function initConfig(
   }
   const configPath = path.join(rootDir, CONFIG_FILE_NAME);
   const names = deps.listFileNames(rootDir) ?? [];
-  const solutionFiles = names.filter((name) => /\.(sln|vbproj)$/i.test(name)).sort();
+  const solutionFiles = names.filter((name) => /\.(sln|vbproj|csproj)$/i.test(name)).sort();
   if (solutionFiles.length > 0) {
     return {
       kind: "error",
       message: [
-        `${rootDir} には ${solutionFiles.join(", ")} があります。VB.NET のプロジェクトは設定なしで npx ${PACK_COMMAND} を実行できます(kind: "generic" は .sln / .vbproj の無いプロジェクト向け)。`,
+        `${rootDir} には ${solutionFiles.join(", ")} があります。VB.NET / C# のプロジェクトは設定なしで npx ${PACK_COMMAND} を実行できます(kind: "generic" は .sln / .vbproj / .csproj の無いプロジェクト向け)。`,
       ].join("\n"),
     };
   }

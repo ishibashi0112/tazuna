@@ -1,12 +1,15 @@
 /**
- * .vbproj の静的 XML 解析(旧スタイル / SDK スタイル)。
+ * .vbproj / .csproj の静的 XML 解析(旧スタイル / SDK スタイル)。
+ * 形式は言語によらず同じ。言語(拡張子で決める。projectLanguage.ts)で変わるのは、SDK スタイルの
+ * 既定の Compile グロブ・言語ごとのプロパティ(VB の Option、C# の Nullable / ImplicitUsings)・
+ * プロジェクト全体の名前空間の取り込み(VB の <Import>、C# の <Using>)だけ。
  *
  * MSBuild 評価は行わない。$()/@()/%()・Condition は展開せず、status として
  * 保持するだけに留める。旧スタイルの Include に書かれたワイルドカードも
  * 未解決(wildcard)のまま。
  *
  * 例外は SDK スタイル(`<Project Sdk="...">`)の既定 Compile グロブ
- * (`**\/*.vb`)で、これは Compile を書かない前提の形式のため展開しないと
+ * (`**\/*.vb`、C# は `**\/*.cs`)で、これは Compile を書かない前提の形式のため展開しないと
  * 何も出せない。展開したことは診断(info)と結果の
  * defaultCompileGlobExpanded に明記し、出力側で「MSBuild の完全評価では
  * ない」と宣言する。`Remove` / `Update` / `DefaultItemExcludes` の
@@ -18,6 +21,7 @@
 import * as path from "node:path";
 import { globToRegExp, normalizeGlobPath } from "./globMatcher.ts";
 import { resolveWindowsPath } from "./paths.ts";
+import { LANGUAGES, projectLanguageOf, type ProjectLanguage } from "./projectLanguage.ts";
 import { parseXml } from "./xmlReader.ts";
 import type {
   ParseDiagnostic,
@@ -37,9 +41,6 @@ export interface VbprojParserDeps {
    */
   listFilesRecursive?(absoluteDir: string): string[] | undefined;
 }
-
-/** SDK スタイルの既定 Compile グロブ(Microsoft.NET.Sdk の既定) */
-const DEFAULT_COMPILE_GLOB = "**/*.vb";
 
 /**
  * SDK の既定除外(Microsoft.NET.Sdk.DefaultItems.props 相当のうち .vb に関係
@@ -72,7 +73,7 @@ const SENSITIVE_FLAG_METADATA = ["AutoGen", "DesignTime", "DesignTimeSharedInput
 const SENSITIVE_PRESENCE_METADATA = ["Generator", "LastGenOutput"];
 
 /** 拡張子による Designer 関連判定(小文字で比較) */
-const SENSITIVE_SUFFIXES = [".designer.vb", ".resx", ".settings"];
+const SENSITIVE_SUFFIXES = [".designer.vb", ".designer.cs", ".resx", ".settings"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -415,8 +416,26 @@ const ENVIRONMENT_PROPERTIES = {
   optionexplicit: "optionExplicit",
   optioninfer: "optionInfer",
   optioncompare: "optionCompare",
+  nullable: "nullable",
+  implicitusings: "implicitUsings",
   rootnamespace: "rootNamespaces",
 } as const satisfies Record<string, keyof ProjectEnvironment>;
+
+/** C# の <Using Include="X" Static="true" /> / <Using Include="X" Alias="A" /> を表示用に整える */
+function describeUsing(entry: unknown): string | undefined {
+  if (!isRecord(entry)) {
+    return undefined;
+  }
+  const include = asString(entry["@_Include"])?.trim();
+  if (include === undefined || include === "") {
+    return undefined;
+  }
+  const alias = childOrAttribute(entry, "Alias");
+  if (alias !== undefined) {
+    return `${alias} = ${include}`;
+  }
+  return childOrAttribute(entry, "Static")?.toLowerCase() === "true" ? `static ${include}` : include;
+}
 
 /** 子要素か属性の値(PackageReference の Version は両方の書き方がある) */
 function childOrAttribute(entry: Record<string, unknown>, name: string): string | undefined {
@@ -463,7 +482,7 @@ function describeReference(tag: string, entry: unknown): string | undefined {
  * ビルド環境を読む(手順文 v10 の <environment>)。言語の版・Option・参照など、AI が使える構文と API を
  * 決めるのに要る値だけ。Condition は評価せず、値が分かれていれば出現順にすべて残す
  */
-function readEnvironment(project: Record<string, unknown>): ProjectEnvironment {
+function readEnvironment(project: Record<string, unknown>, language: ProjectLanguage): ProjectEnvironment {
   const environment: ProjectEnvironment = {
     toolsVersion: asString(project["@_ToolsVersion"])?.trim() || undefined,
     targetFrameworks: [],
@@ -472,6 +491,8 @@ function readEnvironment(project: Record<string, unknown>): ProjectEnvironment {
     optionExplicit: [],
     optionInfer: [],
     optionCompare: [],
+    nullable: [],
+    implicitUsings: [],
     rootNamespaces: [],
     imports: [],
     references: [],
@@ -509,11 +530,21 @@ function readEnvironment(project: Record<string, unknown>): ProjectEnvironment {
       continue;
     }
     for (const [tag, value] of Object.entries(group)) {
-      if (equalsIgnoreCase(tag, "Import")) {
+      if (language === "vb" && equalsIgnoreCase(tag, "Import")) {
         for (const entry of toArray(value)) {
           const include = isRecord(entry) ? asString(entry["@_Include"])?.trim() : undefined;
           if (include !== undefined && include !== "") {
             push(environment.imports, include);
+          }
+        }
+        continue;
+      }
+      if (language === "cs" && equalsIgnoreCase(tag, "Using")) {
+        for (const entry of toArray(value)) {
+          const described = describeUsing(entry);
+          // <Using Remove="..."> は暗黙の using を外す指定。一覧には載せない
+          if (described !== undefined) {
+            push(environment.imports, described);
           }
         }
         continue;
@@ -540,10 +571,11 @@ interface UpdateEntry {
 }
 
 /**
- * SDK スタイルの既定 Compile グロブ(`**\/*.vb`)を展開し、既存の項目と
+ * SDK スタイルの既定 Compile グロブ(`**\/*.vb`、C# は `**\/*.cs`)を展開し、既存の項目と
  * 重複しないものを resolved の ProjectItem として返す。
  */
 function expandDefaultCompileGlob(
+  language: ProjectLanguage,
   projectDir: string,
   existingItems: readonly ProjectItem[],
   removePatterns: readonly string[],
@@ -568,7 +600,8 @@ function expandDefaultCompileGlob(
     return undefined;
   }
 
-  const includeRegExp = globToRegExp(DEFAULT_COMPILE_GLOB);
+  const defaultCompileGlob = LANGUAGES[language].defaultCompileGlob;
+  const includeRegExp = globToRegExp(defaultCompileGlob);
   const excludeRegExps = [
     ...DEFAULT_ITEM_EXCLUDES,
     ...extraExcludes,
@@ -618,7 +651,7 @@ function expandDefaultCompileGlob(
   }
   diagnostics.push({
     severity: "info",
-    message: `SDK スタイルのため既定の Compile グロブ(${DEFAULT_COMPILE_GLOB})を展開しました: ${expanded.length} 件(${details.join("、")})。MSBuild の完全評価ではありません`,
+    message: `SDK スタイルのため既定の Compile グロブ(${defaultCompileGlob})を展開しました: ${expanded.length} 件(${details.join("、")})。MSBuild の完全評価ではありません`,
   });
   return expanded;
 }
@@ -664,10 +697,10 @@ function applyUpdates(
 }
 
 /**
- * .vbproj の XML 文字列を解析し、正規化した ProjectItem 配列と診断を返す。
+ * .vbproj / .csproj の XML 文字列を解析し、正規化した ProjectItem 配列と診断を返す。
  *
- * @param xmlContent .vbproj の内容(BOM 付き可)
- * @param projectPath .vbproj の絶対パス(相対パス解決の基準に使用)
+ * @param xmlContent .vbproj / .csproj の内容(BOM 付き可)
+ * @param projectPath .vbproj / .csproj の絶対パス(相対パス解決の基準に使用。拡張子で言語を決める)
  * @param deps ファイルシステム依存の注入
  */
 export function parseVbproj(
@@ -676,10 +709,12 @@ export function parseVbproj(
   deps: VbprojParserDeps,
 ): VbprojParseResult {
   const projectDir = path.dirname(projectPath);
+  const language = projectLanguageOf(projectPath) ?? "vb";
   const diagnostics: ParseDiagnostic[] = [];
   const items: ProjectItem[] = [];
   const result: VbprojParseResult = {
     projectPath,
+    language,
     projectDir,
     projectStyle: "legacy",
     defaultCompileGlobExpanded: false,
@@ -687,7 +722,7 @@ export function parseVbproj(
     diagnostics,
   };
 
-  // BOM 除去(VS が保存する .vbproj は UTF-8 BOM 付きが多い)
+  // BOM 除去(VS が保存する .vbproj / .csproj は UTF-8 BOM 付きが多い)
   const xml = xmlContent.replace(/^\uFEFF/, "");
 
   const read = parseXml(xml);
@@ -708,12 +743,12 @@ export function parseVbproj(
   if (!isRecord(project)) {
     diagnostics.push({
       severity: "error",
-      message: "<Project> 要素が見つかりません(.vbproj ではない可能性があります)",
+      message: `<Project> 要素が見つかりません(${LANGUAGES[language].projectExtension} ではない可能性があります)`,
     });
     return result;
   }
 
-  result.environment = readEnvironment(project);
+  result.environment = readEnvironment(project, language);
 
   const toolsVersion = asString(project["@_ToolsVersion"]);
   if (toolsVersion !== undefined) {
@@ -820,6 +855,7 @@ export function parseVbproj(
       });
     } else {
       const expanded = expandDefaultCompileGlob(
+        language,
         projectDir,
         items,
         removePatterns,

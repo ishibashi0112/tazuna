@@ -4,7 +4,7 @@
 コマンドラインツール tazuna の導入審査用の資料です。
 どのデータがどこへ出るか、ツールが何をして何をしないかを、コードで確かめられる形でまとめます。
 
-- 対象: tazuna 0.16.0(2026-11-02 時点)
+- 対象: tazuna 0.17.0(2026-11-02 時点)
 - ソース: <https://github.com/ishibashi0112/tazuna>
 - ライセンス: MIT
 - 以前の slnmix(パックを作る側)と petari(変更を当てる側)は、0.15.0 で 1 つのパッケージにまとめ、tazuna に
@@ -58,13 +58,15 @@ grep -rnE "from ['\"](node:)?(https?|net|tls|dgram|dns)['\"]|require\(['\"](http
 パックに入れるファイルは、プロジェクトが宣言したものから決めます。ディレクトリを推測で丸ごと
 走査することはしません。
 
-- **VB.NET(.sln / .vbproj)**: `.sln` / `.vbproj`(Visual Studio のプロジェクト定義)を解析し、
-  **ビルド対象として登録されているソース**を入れます。新しい形式(SDK スタイル)の `.vbproj` では、
-  既定でビルド対象になるプロジェクトフォルダ内の `*.vb` も入ります。設定ファイル(`tazuna.config.json`。
-  旧名の `slnmix.config.json` も読む)の `extraRoots` に書いたディレクトリも入ります。
-  `.vbproj` 本体は入れませんが、そこから読んだビルド環境の要約(`<environment>`。Visual Studio の形式・
-  Visual Basic と .NET Framework の版・Option の設定・ルート名前空間・プロジェクト全体の Imports・
-  参照の名前と版)を入れます(0.16.0 から。参照の DLL の置き場所(HintPath)と公開キーは入れません)
+- **VB.NET / C#(.sln / .vbproj / .csproj)**: `.sln` / `.vbproj` / `.csproj`(Visual Studio のプロジェクト定義。
+  `.csproj` は 0.17.0 から)を解析し、**ビルド対象として登録されているソース**を入れます。新しい形式(SDK スタイル)の
+  プロジェクトでは、既定でビルド対象になるプロジェクトフォルダ内の `*.vb` / `*.cs` も入ります。設定ファイル
+  (`tazuna.config.json`。旧名の `slnmix.config.json` も読む)の `extraRoots` に書いたディレクトリも入ります。
+  プロジェクトファイル本体は入れませんが、そこから読んだビルド環境の要約(`<environment>`。Visual Studio の形式・
+  言語(Visual Basic / C#)と .NET の版・Option / Nullable の設定・ルート名前空間・プロジェクト全体の Imports / using・
+  参照の名前と版)を入れます(0.16.0 から。参照の DLL の置き場所(HintPath)と公開キーは入れません)。
+  0.16.x までは `.sln` の中の `.csproj` を読まずに飛ばしていたため、VB と C# の混在する `.sln` では、0.17.0 から
+  C# のソースもパックに入ります(入れたくなければ `.repomixignore` にそのフォルダを書きます)
 - **それ以外の言語**(設定ファイルの `kind: "generic"`): `extraRoots` に書いたディレクトリか、書いていなければ
   **git が管理しているファイル**(`git ls-files --cached --others --exclude-standard` の一覧。コミット済みのものと、
   `.gitignore` に一致しない未コミットのもの)を入れます(0.15.0 から)
@@ -76,7 +78,7 @@ grep -rnE "from ['\"](node:)?(https?|net|tls|dgram|dns)['\"]|require\(['\"](http
   git の一覧から集めるときは、ロックファイル(`package-lock.json` など)と 256KB を超えるファイルも除きます。
   除外したファイルは理由付きでパック内に一覧されます。`.gitignore` / `.repomixignore` に
   一致するファイルは、`tazuna build` のエラーの文面にも抜粋を載せません
-- 注意: `.vbproj` がプロジェクトの外(別ドライブなど)のファイルを参照している場合は、
+- 注意: `.vbproj` / `.csproj` がプロジェクトの外(別ドライブなど)のファイルを参照している場合は、
   そのファイルも入ります(ビルドに使われるため)。git の一覧から集めるときは、コミットしていない
   ファイルでも `.gitignore` に書いていなければ入ります。入れたくないファイルは `.gitignore` か
   `.repomixignore` に書いてください
@@ -222,7 +224,7 @@ tazuna は changes.md の内容を**実行しません**。テキストとして
 
 **AI が書いたコードが PC 上で動くのは、利用者がビルド・テストを実行したとき**です
 (`tazuna build` もビルドを実行します)。.vbproj のビルドイベントのように、プロジェクトの
-定義に書かれた処理はビルドの時点で動くため、AI が .vbproj / .sln を変えたときは特に差分を確認してください。
+定義に書かれた処理はビルドの時点で動くため、AI が .vbproj / .csproj / .sln を変えたときは特に差分を確認してください。
 そのため、ビルドの前に git diff で変更を確認する運用を前提にしています(運用ガイドの手順も
 この順です)。
 
@@ -266,7 +268,7 @@ ignore)を自前の実装と Node.js の標準機能に置き換えました。
 
 | 以前の依存 | 置き換え先 | 確かめたこと |
 |---|---|---|
-| fast-xml-parser(.sln / .vbproj の XML 解析) | `src/pack/xmlReader.ts` | 正しい XML 2 万通りで以前と同じ結果 |
+| fast-xml-parser(.sln / .vbproj / .csproj の XML 解析) | `src/pack/xmlReader.ts` | 正しい XML 2 万通りで以前と同じ結果 |
 | iconv-lite(Shift_JIS の読み取り) | Node.js の `TextDecoder("shift_jis")`(適用と同じもの) | 普通の日本語のソースでは同じ結果(違うのは不正なバイト列・0xF9 の外字などだけ) |
 | ignore(.gitignore の判定) | `src/pack/services/gitignoreMatcher.ts` | `git check-ignore` と 12 万通りで同じ結果 |
 
@@ -277,11 +279,11 @@ slnmix のパッケージ(0.23.0 から)と petari のパッケージ(0.15.0 か
 `npx` で都度取得すると、その時点の最新版になります。審査した版で固定したい場合は、次のいずれかを推奨します。
 
 - 社内の npm レジストリ(ミラー)に審査済みの版だけを置き、そこから取得する
-- `npm install -g tazuna@0.16.0` のように版数を指定して導入し、更新は審査の上で行う
+- `npm install -g tazuna@0.17.0` のように版数を指定して導入し、更新は審査の上で行う
 - ソースを取得して `pnpm install --frozen-lockfile` でロックファイルどおりに入れ、
   ビルドしたものを配布する(ロックファイルに入っているのは開発用の依存だけです)
 
-公開パッケージの中身は `npm pack tazuna@0.16.0` で取得して確認できます。
+公開パッケージの中身は `npm pack tazuna@0.17.0` で取得して確認できます。
 
 ## 9. Claude Code / Codex などのエージェント型ツールとの違い
 
@@ -297,7 +299,7 @@ slnmix のパッケージ(0.23.0 から)と petari のパッケージ(0.15.0 か
 | リスク | 対策 |
 |---|---|
 | AI が誤った・悪意のあるコードを書く | ビルド・テストの前に git diff で確認する。変更は `tazuna undo` と git で戻せる |
-| AI が .vbproj / .sln のビルド定義(ビルドイベント等)を書き換え、ビルド時にコマンドが動く | .vbproj / .sln の差分は特に確認してからビルドする(tazuna 自身が .vbproj に足すのは新規ファイルの登録行だけ) |
+| AI が .vbproj / .csproj / .sln のビルド定義(ビルドイベント等)を書き換え、ビルド時にコマンドが動く | .vbproj / .csproj / .sln の差分は特に確認してからビルドする(tazuna 自身が .vbproj / .csproj に足すのは新規ファイルの登録行だけ) |
 | ソースや文書に紛れた指示で AI の回答が誘導される(プロンプトインジェクション) | 回答はファイルの変更としてしか反映されず、パスはプロジェクト内に限られる。上と同じく差分を確認する |
 | 認証情報のマスク漏れ | マスクは推定のため、秘密情報をソースに置かない。機密度の高い案件ではパックの中身を確認してから送る(ビルドのエラーと失敗レポートの文面も同じ規則で伏せる。§4.2) |
 | git の一覧から集めるとき、コミットしていない手元のファイル(`.gitignore` に書いていないもの)が入る | 入れたくないファイルは `.gitignore` か `.repomixignore` に書く。パックの `<directory_structure>` で入ったファイルを確かめられる(§4.1) |
