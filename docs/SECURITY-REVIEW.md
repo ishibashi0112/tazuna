@@ -4,7 +4,7 @@
 コマンドラインツール tazuna の導入審査用の資料です。
 どのデータがどこへ出るか、ツールが何をして何をしないかを、コードで確かめられる形でまとめます。
 
-- 対象: tazuna 0.18.0(2026-11-02 時点)
+- 対象: tazuna 0.19.0(2026-11-02 時点)
 - ソース: <https://github.com/ishibashi0112/tazuna>
 - ライセンス: MIT
 - 以前の slnmix(パックを作る側)と petari(変更を当てる側)は、0.15.0 で 1 つのパッケージにまとめ、tazuna に
@@ -109,6 +109,19 @@ MSBuild の `Exec` やビルド後イベントに書いたものも。SQL の `U
 PostgreSQL のコマンド(`psql` / `createuser` / `pgbench` など)の `-P` は除きます)・Dockerfile の `ENV` / `ARG`(行末の `\` で続く行も)・
 docker compose の `- POSTGRES_PASSWORD=...`(引用符で囲んだものも)・`docker run -e DB_PASSWORD=...` も同じです
 (`.env` や compose の一覧の、引用符の外の行末の ` # コメント` は残します)。
+0.19.0 から、次の形も伏せます。YAML・`.properties`・`setup.cfg` などの引用符で囲まない `password: ...`(compose の
+`MYSQL_ROOT_PASSWORD: ...`・Spring の `spring.datasource.password: ...`・Kubernetes の Secret も。`|` / `>` の値は続く行を
+まとめて伏せます。差し込み(`${DB_PASSWORD}` / `{{ ... }}` / `<%= ... %>` / `${{ secrets.X }}`)・別名・タグ・真偽値・
+空の値(入れ子)・型の名前・表示の文言は除き、ユーザー ID 系のキーは伏せません。コードのファイル(`.php` / `.rb` / `.rs` /
+`.vue` など)ではオブジェクトのフィールドと区別できないため読みません)。Oracle の `sqlplus` / `exp` / `imp` / `expdp` /
+`impdp` / `sqlldr` / `dgmgrl` / `rman` と SQL*Plus の `CONNECT` の `ユーザー/パスワード@接続先`(VB の `Shell("sqlplus ...")` /
+`Process.Start("sqlplus.exe", "...")` の文字列の中も。`&1` などの置換変数・`/ as sysdba` は除きます)。SQL の
+`IDENTIFIED BY ...`(MySQL の `IDENTIFIED WITH 方式 BY` も。小文字の `identified by` は前に `USER 名` / `TO 名` などがあるとき
+だけ)と PostgreSQL の `WITH PASSWORD '...'`(`&pw` / `:pw` などの変数・連結は除きます)。PHP / Ruby の
+`'password' => '...'`(検証の規則 `'required|min:8'`・Laravel の型変換 `'hashed'` は除きます)・添字への代入
+(`$config['db']['password'] = '...'` / `os.environ["DB_PASSWORD"] = "..."`)・秘密の名前を最初の引数に渡す関数の値
+(`define('DB_PASSWORD', '...')`・`env('DB_PASSWORD', '既定値')`・`os.environ.get("DB_PASSWORD", "既定値")`・
+`System.getProperty("db.password", "既定値")`)。
 キーの末尾の番号(`Password2`・`DB_PASSWORD_2`・`SMTP_PASS1`)は除いて判定します(小文字の `pass1` / `pass2` だけのキー
 (`this.pass1` / `self.pass1` も)はコードの処理の段のことが多いため秘密系とみなしません)。区切りのないキー
 (`DBPASSWORD`・`PGPASSWORD`・`sqlpwd`)も末尾の `password` などで判定します。
@@ -125,10 +138,15 @@ TypeScript / JavaScript・Java・C#・Go・Python のファイルは、言語の
 対応づけられないファイルは、言語を区別しない伏せ方の結果をそのまま使います(どちらも伏せる側に倒す)。それ以外の言語・設定ファイルは
 言語を区別せずに伏せます。
 ランダムな英数字列(高エントロピー値)も既定で伏せます。置き換えた件数は実行時に表示され、
-パックのヘッダーには AI 向けに伏せ字であることを明記します。まだ伏せない形もあります
-(YAML の `password: ...` や INI の `db_password = ...` のような引用符のない値、C# の `DefaultSettingValue` 属性・複数行にわたる
+パックのヘッダーには AI 向けに伏せ字であることを明記します。高エントロピー値として拾うのは 20 文字以上のものなので、
+それより短い値や人が決めた値(`admin123` など)は、キーの名前と書き方を読めたときだけ伏せます。まだ伏せない形もあります
+(setter・builder の引数(`ds.setPassword("...")` / `.password("...")`)、`process.env.X || "..."` / `?? "..."` の既定値、
+YAML のフロー形式(`{password: ...}`)、Rust の `const API_KEY: &str = "..."`・C の `#define`・R の `<-`・Makefile の `:=` / `?=`、
+`curl -u ユーザー:パスワード`、PowerShell の `ConvertTo-SecureString "..." -AsPlainText`、XML の `<param name="password" value="..."/>`、
+キーの最後の語が秘密系でないもの(Rails の `secret_key_base` など。値が長いランダムな文字列なら高エントロピー値として伏せます)、
+C# の `DefaultSettingValue` 属性・複数行にわたる
 文字列の連結、`String.Concat(...)`、VB の文字列や XML リテラルの中に書いた JSON / XML、
-`serializeAs="Xml"` の設定値、PHP / Ruby の `'password' => '...'`、メソッドの引数の組(`props.put("password", "...")`)、
+`serializeAs="Xml"` の設定値、
 Dockerfile の空白で区切る古い形の `ENV DB_PASSWORD ...`、URL のパスワードの
 エンコードしていない `;` の後ろ、コマンドの引数の値を `\"...\"` / `""...""` のようにエスケープした引用符で囲んだもの、
 PowerShell の行の継続(`` ` ``)・`Invoke-Sqlcmd -Password`、`net.exe use`、`sqlcmd` の `/U` `/P` の形など)。
@@ -285,11 +303,11 @@ slnmix のパッケージ(0.23.0 から)と petari のパッケージ(0.15.0 か
 `npx` で都度取得すると、その時点の最新版になります。審査した版で固定したい場合は、次のいずれかを推奨します。
 
 - 社内の npm レジストリ(ミラー)に審査済みの版だけを置き、そこから取得する
-- `npm install -g tazuna@0.18.0` のように版数を指定して導入し、更新は審査の上で行う
+- `npm install -g tazuna@0.19.0` のように版数を指定して導入し、更新は審査の上で行う
 - ソースを取得して `pnpm install --frozen-lockfile` でロックファイルどおりに入れ、
   ビルドしたものを配布する(ロックファイルに入っているのは開発用の依存だけです)
 
-公開パッケージの中身は `npm pack tazuna@0.18.0` で取得して確認できます。
+公開パッケージの中身は `npm pack tazuna@0.19.0` で取得して確認できます。
 
 ## 9. Claude Code / Codex などのエージェント型ツールとの違い
 

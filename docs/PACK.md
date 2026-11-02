@@ -28,7 +28,10 @@ DependentUpon 解決済み)に基づいてエクスポートします。
   (`パスワード` / `ﾊﾟｽﾜｰﾄﾞ` 等の日本語変数名・キー名、メソッド引数
   `Login("...", "...")`、UI サマリー生成前の Designer ソースにも適用)。
   設定ファイルの appSettings(`<add key="DbPassword" value="..." />`)・My.Settings・
-  JSON の `"password": "..."`・`DB_PASSWORD=...` の値も伏せる。TypeScript / JavaScript・Java・C#・Go・Python は
+  JSON の `"password": "..."`・`DB_PASSWORD=...` の値も伏せる。0.19.0 から YAML などの引用符のない
+  `password: ...`・Oracle の `sqlplus scott/...@orcl` / `CONNECT scott/...`・SQL の `IDENTIFIED BY ...`・
+  PHP の `'password' => '...'` / `define('DB_PASSWORD', '...')` も伏せる(一覧は `docs/SECURITY-REVIEW.md` §4.2)。
+  TypeScript / JavaScript・Java・C#・Go・Python は
   文字列とコメントの中だけを伏せ、`process.env.API_KEY` のようなコードは伏せない
 - 既定で厳格モード: ランダムな英数字列(高エントロピー値)も機械的にマスク
   (`--no-strict-mask` で無効化)。出力ヘッダーには AI 向けに

@@ -429,6 +429,16 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
 - 失敗レポートの照合仕様の節に「[MASKED] を含む行は一字も変えずに写す・書き換えや追加はできない」を、レポートに
   [MASKED] が出るときだけ載せる (規約文は変えない。
   slnmix の手順文 (初版から) に「[MASKED] はそのまま残し、値を推測しない」が既にある)
+- 書き方の追加 (v0.19.0、2026-11-02。洗い出しは設計書 §17 の 2026-11-02): 高エントロピーの判定は 20 文字以上なので、
+  人が決めた短い値はキーの名前と書き方を読めたときだけ伏せる。足した書き方: YAML などの引用符で囲まない `キー: 値`
+  (maskColonPairs。`|` / `>` の値は続く行を 1 つの伏せ字に)・Oracle のログオン (CLI_ARGS の sqlplus / exp / imp など・
+  ORACLE_CONNECT)・SQL の IDENTIFIED BY / PASSWORD (maskSqlCredentials。VB のソースでも動く)・KEY_LITERAL の `=>`・
+  SUBSCRIPT_LITERAL・NAMED_ARG_LITERAL。`キー: 値` はコードのファイル (isCodePath。字句解析のない言語の .php / .rb / .rs /
+  .vue など) では読まない (`password: hashedPassword` のようなフィールドを伏せないため)。そのため MaskOptions と MaskMode に
+  `path` を持たせ、パック (repomixExporter) と適用側 (maskModes) で同じ判定にする。言語ごとの伏せ方の内部の汎用テキストの
+  伏せ方は path なし (読む。コードの部分は後で戻る)。テストは tests/mask-formats.test.ts (漏れていた形・伏せすぎない形・
+  適用側の往復)。伏せ方を変えたら公開リポジトリで伏せ字の増減を比べる (/mnt/project-files/plans/mask-gaps/ の
+  スクリプト。2026-11-02 は 12 リポジトリ 3,242 ファイルで +41、伏せすぎ 3 種を直した)
 
 ### slnmix 設計書 §11 の実装 (2026-09-12, v0.9.0)
 
@@ -541,7 +551,9 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   v0.17.0: 2026-11-02 C# の .csproj (パックの論理構成・Designer.cs の UI サマリーとイベント・C# の `<environment>`・
   手順文 v11・旧スタイル .csproj への登録) + 0.16.1 の修正。2026-11-02 公開 /
   v0.18.0: 2026-11-02 init が実際にあるファイルの拡張子を見て generic 構成の `include` / `exclude` を書く
-  (vendor・圧縮済み・生成コード・鍵・データを入れない) + git の外の Python などの extraRoots。**未公開** (公開は利用者)。
+  (vendor・圧縮済み・生成コード・鍵・データを入れない) + git の外の Python などの extraRoots。2026-11-02 公開 /
+  v0.19.0: 2026-11-02 人が決めた短いパスワードの伏せ方 (YAML の `キー: 値`・Oracle のログオン・SQL の IDENTIFIED BY・
+  PHP / Ruby の `=>` など)。**未公開** (公開は利用者)。
   リポジトリ: https://github.com/ishibashi0112/tazuna (旧 https://github.com/ishibashi0112/petari。GitHub が転送する)
   リリース手順: version を上げて `pnpm publish` (`prepublishOnly` が typecheck → test → build を実行。認証はユーザー)
 - **publish 事故と再発防止 (2026-09-14)**: v0.9.0 は `package.json` の version だけ 0.9.0 で、
