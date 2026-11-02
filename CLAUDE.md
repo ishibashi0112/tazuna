@@ -69,6 +69,13 @@ AI の返答 (changes.md) をローカルへ安全に適用し (`tazuna`)、MSBu
   (新規追加した日本語が UTF-8 で書かれる)。半角カナのみの Shift_JIS が UTF-8 として
   有効なバイト列になる稀ケースも UTF-8 優先
 - `src/core/sjis-table.ts` は自動生成 (`pnpm gen:sjis`)。手編集禁止
+- JIS と CP932 で対応表の違う 7 文字 (`〜` U+301C → `～` U+FF5E など。`sjis.ts` の `CP932_EQUIVALENTS`) は、
+  Shift_JIS のファイルに当てるときだけ CP932 の側にそろえる (applier.ts の foldLinesToCp932。SEARCH / REPLACE /
+  CONTENT とも。v0.16.1)。デコードで現れるのは CP932 の側だけなので、そろえても前に通っていたものの結果は変わらない。
+  `sjisEncode` 自体は変換しない (.vbproj の Include のように、実際の名前と違う文字にしてはいけない所があるため)。
+  置き換えた文字は `sjisFolded` に記録し、`buildSjisFoldNote` で結果の末尾に注記する。0x815F (U+005C / U+FF3C) は
+  ASCII のバックスラッシュのため対象外。en dash (U+2013) など対応の無い文字は推測で置き換えず unencodable のまま
+  (エラーの文にコードポイントを添える)
 
 ### パック (tazuna pack / build / init。旧 slnmix、2026-11-01 統合、v0.15.0)
 
@@ -505,7 +512,9 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   言語汎用化 (git の一覧・言語ごとの伏せ方) + **tazuna への改名** (npm のパッケージ名も tazuna。petari 0.15.0 は
   `compat/petari/` の互換パッケージ)。2026-11-02 公開 (tazuna 0.15.0 → petari 0.15.0 → slnmix 0.23.0 の順。petari と slnmix は同日に `npm deprecate`) /
   v0.16.0: 2026-11-02 手順文 v10 (コード中のコメントの方針・自己検証の表の列の差し替え) + パックの `<environment>`
-  (.vbproj のビルド環境)。**未公開** (公開は利用者)。
+  (.vbproj のビルド環境)。2026-11-02 公開 /
+  v0.16.1: 2026-11-02 Shift_JIS のファイルへの「〜」(U+301C) などの JIS と CP932 で対応表の違う 7 文字を
+  CP932 の側にそろえて照合・書き込み (以前は変換できないエラーで止まった)。**未公開** (公開は利用者)。
   リポジトリ: https://github.com/ishibashi0112/tazuna (旧 https://github.com/ishibashi0112/petari。GitHub が転送する)
   リリース手順: version を上げて `pnpm publish` (`prepublishOnly` が typecheck → test → build を実行。認証はユーザー)
 - **publish 事故と再発防止 (2026-09-14)**: v0.9.0 は `package.json` の version だけ 0.9.0 で、

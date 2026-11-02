@@ -5,6 +5,7 @@ import {
   type FileState,
   type NewFileConfig,
 } from "../src/core/applier.ts";
+import { buildSjisFoldNote } from "../src/core/report.ts";
 import { sjisEncode } from "../src/core/sjis.ts";
 import type { ChangeSet, FileChange, ReplaceBlock } from "../src/types.ts";
 
@@ -440,5 +441,140 @@ describe("planChangeSet: 追記型ブロックの適用済み検出 (§6.1)", ()
     expect(plan.outcomes[0]?.afterBytes).toEqual(
       utf8("Sub A()\n    Me.Close()\nEnd Sub\n\nPrivate Sub Foo()\n    Bar()\nEnd Sub\nDim b = 2\n"),
     );
+  });
+});
+
+describe("planChangeSet: Shift_JIS のファイルの「〜」などの文字 (JIS と CP932 の対応表の違い)", () => {
+  const WAVE = "〜"; // 〜 (AI が書きがちな側。Shift_JIS へは直接変換できない)
+  const TILDE = "～"; // ～ (Windows の Shift_JIS が 0x8160 をデコードした文字)
+
+  it("REPLACE の 〜 は Shift_JIS の ～ (0x8160) として書き、書いた文字を記録する", () => {
+    const plan = planChangeSet(
+      cs({
+        op: "replace",
+        path: "a.vb",
+        line: 1,
+        blocks: [block(['MsgBox("数量")'], [`MsgBox("数量は 1${WAVE}99 で、−1 は不可")`])],
+      }),
+      states({ "a.vb": state(sjis('MsgBox("数量")\r\n')) }),
+      NEW_FILE,
+    );
+    expect(plan.ok).toBe(true);
+    expect(plan.outcomes[0]?.afterBytes).toEqual(sjis(`MsgBox("数量は 1${TILDE}99 で、－1 は不可")\r\n`));
+    expect(plan.outcomes[0]?.appliedBlocks[0]?.sjisFolded).toEqual([WAVE, "−"]);
+    expect(buildSjisFoldNote(plan.outcomes, true)).toBe(
+      "注: Shift_JIS のファイルのため、次の文字を Windows の Shift_JIS で対応する文字にして書き込みました: " +
+        "〜 (U+301C) → ～ (U+FF5E)、− (U+2212) → － (U+FF0D)",
+    );
+  });
+
+  it("SEARCH の 〜 はファイルの ～ と一致する", () => {
+    const plan = planChangeSet(
+      cs({
+        op: "replace",
+        path: "a.vb",
+        line: 1,
+        blocks: [block([`' 1${WAVE}99`], ["' 1 から 99"])],
+      }),
+      states({ "a.vb": state(sjis(`' 1${TILDE}99\r\n`)) }),
+      NEW_FILE,
+    );
+    expect(plan.ok).toBe(true);
+    expect(plan.outcomes[0]?.afterBytes).toEqual(sjis("' 1 から 99\r\n"));
+    expect(plan.outcomes[0]?.appliedBlocks[0]?.sjisFolded).toBeUndefined();
+    expect(buildSjisFoldNote(plan.outcomes, true)).toBeNull();
+  });
+
+  it("同じ changes.md をもう一度当てると適用済み (SEARCH 不一致で REPLACE が既にある)", () => {
+    const change: FileChange = {
+      op: "replace",
+      path: "a.vb",
+      line: 1,
+      blocks: [block(["Dim a = 1"], [`' 1${WAVE}9`, "Dim a = 2"])],
+    };
+    const first = planChangeSet(cs(change), states({ "a.vb": state(sjis("' 日本語\r\nDim a = 1\r\n")) }), NEW_FILE);
+    const after = first.outcomes[0]?.afterBytes as Uint8Array;
+    expect(after).toEqual(sjis(`' 日本語\r\n' 1${TILDE}9\r\nDim a = 2\r\n`));
+    const second = planChangeSet(cs(change), states({ "a.vb": state(after) }), NEW_FILE);
+    expect(second.ok).toBe(true);
+    expect(second.outcomes[0]?.alreadyApplied).toBe(true);
+  });
+
+  it("追記型ブロックでも、追記する行 (〜 を含む) が既にあれば適用済み", () => {
+    const change: FileChange = {
+      op: "replace",
+      path: "a.vb",
+      line: 1,
+      blocks: [block(["End Sub"], ["End Sub", "", `' 1${WAVE}9`])],
+    };
+    const first = planChangeSet(cs(change), states({ "a.vb": state(sjis("' 日本語\r\nEnd Sub\r\n")) }), NEW_FILE);
+    expect(first.outcomes[0]?.afterBytes).toEqual(sjis(`' 日本語\r\nEnd Sub\r\n\r\n' 1${TILDE}9\r\n`));
+    const second = planChangeSet(
+      cs(change),
+      states({ "a.vb": state(first.outcomes[0]?.afterBytes as Uint8Array) }),
+      NEW_FILE,
+    );
+    expect(second.outcomes[0]?.alreadyApplied).toBe(true);
+  });
+
+  it("UTF-8 のファイルでは置き換えない (〜 と ～ は別の文字のまま)", () => {
+    const written = planChangeSet(
+      cs({ op: "replace", path: "a.ts", line: 1, blocks: [block(["a"], [`// 1${WAVE}9`])] }),
+      states({ "a.ts": state(utf8("a\n")) }),
+      NEW_FILE,
+    );
+    expect(written.outcomes[0]?.afterBytes).toEqual(utf8(`// 1${WAVE}9\n`));
+    expect(written.outcomes[0]?.appliedBlocks[0]?.sjisFolded).toBeUndefined();
+    const searched = planChangeSet(
+      cs({ op: "replace", path: "a.ts", line: 1, blocks: [block([`// 1${WAVE}9`], ["x"])] }),
+      states({ "a.ts": state(utf8(`// 1${TILDE}9\n`)) }),
+      NEW_FILE,
+    );
+    expect(searched.failures[0]?.kind).toBe("block-not-found");
+  });
+
+  it("rewrite・Shift_JIS の create も置き換え、既存の同じ内容の create は適用済み", () => {
+    const rewrite = planChangeSet(
+      cs({ op: "rewrite", path: "a.vb", line: 1, content: [`' 1${WAVE}9`] }),
+      states({ "a.vb": state(sjis("' 古い\r\n")) }),
+      NEW_FILE,
+    );
+    expect(rewrite.outcomes[0]?.afterBytes).toEqual(sjis(`' 1${TILDE}9\r\n`));
+    expect(rewrite.outcomes[0]?.sjisFolded).toEqual([WAVE]);
+
+    const create = planChangeSet(
+      cs({ op: "create", path: "new.vb", line: 1, content: [`' ${WAVE}`] }),
+      states({}),
+      { encoding: "shift_jis", eol: "crlf" },
+    );
+    expect(create.outcomes[0]?.afterBytes).toEqual(sjis(`' ${TILDE}\r\n`));
+    expect(create.outcomes[0]?.sjisFolded).toEqual([WAVE]);
+    expect(buildSjisFoldNote(create.outcomes, false)).toContain("書き込みます: 〜 (U+301C) → ～ (U+FF5E)");
+
+    const again = planChangeSet(
+      cs({ op: "create", path: "new.vb", line: 1, content: [`' ${WAVE}`] }),
+      states({ "new.vb": state(sjis(`' ${TILDE}\r\n`)) }),
+      NEW_FILE,
+    );
+    expect(again.outcomes[0]?.alreadyApplied).toBe(true);
+
+    // UTF-8 の create は置き換えない
+    const utf8Create = planChangeSet(
+      cs({ op: "create", path: "new.ts", line: 1, content: [`// ${WAVE}`] }),
+      states({}),
+      NEW_FILE,
+    );
+    expect(utf8Create.outcomes[0]?.afterBytes).toEqual(utf8(`// ${WAVE}\n`));
+  });
+
+  it("対応する文字の無いもの (– U+2013 など) は従来どおり unencodable で、コードポイントを添える", () => {
+    const plan = planChangeSet(
+      cs({ op: "replace", path: "a.vb", line: 1, blocks: [block(["日本語"], ["A – B 〜"])] }),
+      states({ "a.vb": state(sjis("日本語\r\n")) }),
+      NEW_FILE,
+    );
+    expect(plan.failures[0]?.kind).toBe("unencodable");
+    expect(plan.failures[0]?.message).toContain("– (U+2013)");
+    expect(plan.failures[0]?.message).not.toContain("U+301C");
   });
 });

@@ -6,7 +6,7 @@
  * これにより Shift_JIS の重複マッピング (NEC/IBM 拡張等) があっても、
  * 触っていない行のバイト列は原理的に変わらない。再エンコードは変更行のみ。
  */
-import { sjisEncode } from "./sjis.ts";
+import { describeChars, sjisEncode } from "./sjis.ts";
 
 export type FileEncoding = "utf8" | "shift_jis";
 export type Eol = "lf" | "crlf";
@@ -146,7 +146,7 @@ function encodeText(text: string, encoding: FileEncoding): Uint8Array {
   const { bytes, unencodable } = sjisEncode(text);
   if (unencodable.length > 0) {
     throw new EncodingError(
-      `Shift_JIS に変換できない文字が含まれています: ${unencodable.join(" ")}`,
+      `Shift_JIS に変換できない文字が含まれています: ${describeChars(unencodable)}`,
     );
   }
   return bytes;

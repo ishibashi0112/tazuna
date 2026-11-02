@@ -22,6 +22,7 @@ import { parseChangesRecovering } from "../core/parser.ts";
 import {
   buildBlankInsensitiveNote,
   buildMaskRestoreNote,
+  buildSjisFoldNote,
   buildFailureReport,
   buildParseErrorReport,
 } from "../core/report.ts";
@@ -370,6 +371,8 @@ export async function applyCommand(argv: string[], detected?: DetectedChanges): 
     if (dryRunNote !== null) out(dryRunNote);
     const dryRunMaskNote = buildMaskRestoreNote(plan.outcomes, false);
     if (dryRunMaskNote !== null) out(dryRunMaskNote);
+    const dryRunSjisNote = buildSjisFoldNote(plan.outcomes, false);
+    if (dryRunSjisNote !== null) out(dryRunSjisNote);
     if (plan.failures.length > 0) {
       out("");
       await emitReport(
@@ -493,6 +496,8 @@ export async function applyCommand(argv: string[], detected?: DetectedChanges): 
   if (appliedNote !== null) out(appliedNote);
   const maskNote = buildMaskRestoreNote(plan.outcomes, true);
   if (maskNote !== null) out(maskNote);
+  const sjisNote = buildSjisFoldNote(plan.outcomes, true);
+  if (sjisNote !== null) out(sjisNote);
   if (plan.failures.length > 0) {
     out(`スキップした失敗 ${plan.failures.length} 件のレポート:`);
     out("");
