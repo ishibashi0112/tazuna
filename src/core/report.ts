@@ -14,6 +14,7 @@ import type { Failure } from "./applier.ts";
 import type { FileOutcome } from "./applier.ts";
 import { STAGE_LABEL } from "./matcher.ts";
 import { renderNearest, renderNearestReplace } from "./nearest.ts";
+import { CP932_EQUIVALENTS, describeChars } from "./sjis.ts";
 import type { ParseIssue } from "../types.ts";
 
 const MATCH_SPEC_NOTE = [
@@ -173,6 +174,31 @@ export function buildBlankInsensitiveNote(outcomes: FileOutcome[]): string | nul
   }
   if (count === 0) return null;
   return `注: ${count} 件のブロックは空行の差を吸収して適用しました (git diff で空行の並びを確認してください)`;
+}
+
+/**
+ * Shift_JIS のファイルに「〜」(U+301C) などを、Windows の Shift_JIS (CP932) の対応する文字 (「～」U+FF5E など)
+ * にして書いたときの注記。changes.md と違う文字が書かれることを dry-run と適用サマリの末尾で知らせる。
+ * 該当が無ければ null。
+ */
+export function buildSjisFoldNote(outcomes: FileOutcome[], written: boolean): string | null {
+  const counts = new Map<string, number>();
+  const add = (chars: string[] | undefined): void => {
+    for (const ch of chars ?? []) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  };
+  for (const o of outcomes) {
+    add(o.sjisFolded);
+    for (const b of o.appliedBlocks) add(b.sjisFolded);
+  }
+  if (counts.size === 0) return null;
+  const pairs = [...counts.entries()].map(([ch, n]) => {
+    const to = CP932_EQUIVALENTS.get(ch) ?? ch;
+    return `${describeChars([ch])} → ${describeChars([to])}${n > 1 ? ` × ${n}` : ""}`;
+  });
+  return (
+    `注: Shift_JIS のファイルのため、次の文字を Windows の Shift_JIS で対応する文字にして` +
+    `${written ? "書き込みました" : "書き込みます"}: ${pairs.join("、")}`
+  );
 }
 
 /**

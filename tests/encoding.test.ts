@@ -7,7 +7,7 @@ import {
   findUnencodable,
   makeDocument,
 } from "../src/core/encoding.ts";
-import { sjisEncode } from "../src/core/sjis.ts";
+import { CP932_EQUIVALENTS, describeChars, foldToCp932, sjisEncode } from "../src/core/sjis.ts";
 
 const utf8 = (s: string): Uint8Array => new TextEncoder().encode(s);
 const sjis = (s: string): Uint8Array => {
@@ -222,5 +222,37 @@ describe("decodeShiftJis: 1 バイトの制御文字", () => {
   it("Shift_JIS のファイルの行も同じ (decodeFile)", () => {
     const doc = decodeFile(Uint8Array.from([0x82, 0xa0, 0x1a, 0x0a]));
     assert.strictEqual(doc.lines[0]?.text, "あ\u001a");
+  });
+});
+
+describe("CP932_EQUIVALENTS: JIS の対応表と Windows の Shift_JIS で別のコードポイントになる文字", () => {
+  const expected: [string, string, number[]][] = [
+    ["〜", "～", [0x81, 0x60]], // 〜 → ～
+    ["‖", "∥", [0x81, 0x61]], // ‖ → ∥
+    ["−", "－", [0x81, 0x7c]], // − → －
+    ["¢", "￠", [0x81, 0x91]], // ¢ → ￠
+    ["£", "￡", [0x81, 0x92]], // £ → ￡
+    ["¬", "￢", [0x81, 0xca]], // ¬ → ￢
+    ["—", "―", [0x81, 0x5c]], // — → ―
+  ];
+
+  it("キーの文字は sjisEncode では変換できず、値の文字は期待どおりのバイトになりデコードで値に戻る", () => {
+    expect([...CP932_EQUIVALENTS.entries()]).toEqual(expected.map(([from, to]) => [from, to]));
+    for (const [from, to, bytes] of expected) {
+      expect(sjisEncode(from).unencodable).toEqual([from]);
+      expect([...sjisEncode(to).bytes]).toEqual(bytes);
+      expect(decodeShiftJis(Uint8Array.from(bytes))).toBe(to);
+    }
+  });
+
+  it("foldToCp932 はキーの文字だけを値の文字にし、変えた文字を出現ごとに返す", () => {
+    const r = foldToCp932("1〜3 件、−5、〜 と ～ と ASCII の - と ~");
+    expect(r.text).toBe("1～3 件、－5、～ と ～ と ASCII の - と ~");
+    expect(r.folded).toEqual(["〜", "−", "〜"]);
+    expect(foldToCp932("変えない").folded).toEqual([]);
+  });
+
+  it("describeChars はコードポイントを添える", () => {
+    expect(describeChars(["–", "🎉"])).toBe("– (U+2013) 🎉 (U+1F389)");
   });
 });

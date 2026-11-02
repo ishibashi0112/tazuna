@@ -89,3 +89,41 @@ export function sjisEncode(text: string): SjisEncodeResult {
 export function sjisUnencodable(text: string): string[] {
   return sjisEncode(text).unencodable;
 }
+
+/**
+ * JIS X 0208 の同じ文字に、Unicode への対応表によって別のコードポイントが当てられているもの。
+ * キーは JIS の対応表 (macOS・JIS X 0213・EUC-JP の多くの実装など) の側、値は Windows の Shift_JIS (CP932)
+ * の側で、TextDecoder("shift_jis") のデコード結果は値の側になる。AI は「〜」(U+301C) のようにキーの側を
+ * 書くことが多く、そのままでは Shift_JIS へ変換できない。Shift_JIS のファイルに書く文字・照合する文字は
+ * 値の側にそろえる (foldToCp932)。sjisEncode 自体は変換しない (ファイル名を .vbproj に書くときなど、
+ * 実際の名前と違う文字にしてはいけない所があるため)。
+ * 0x815F (U+005C と U+FF3C) は ASCII のバックスラッシュのため対象外
+ */
+export const CP932_EQUIVALENTS: ReadonlyMap<string, string> = new Map([
+  ["\u301c", "\uff5e"], // 〜 WAVE DASH → ～ FULLWIDTH TILDE (0x8160)
+  ["\u2016", "\u2225"], // ‖ DOUBLE VERTICAL LINE → ∥ PARALLEL TO (0x8161)
+  ["\u2212", "\uff0d"], // − MINUS SIGN → － FULLWIDTH HYPHEN-MINUS (0x817C)
+  ["\u00a2", "\uffe0"], // ¢ CENT SIGN → ￠ FULLWIDTH CENT SIGN (0x8191)
+  ["\u00a3", "\uffe1"], // £ POUND SIGN → ￡ FULLWIDTH POUND SIGN (0x8192)
+  ["\u00ac", "\uffe2"], // ¬ NOT SIGN → ￢ FULLWIDTH NOT SIGN (0x81CA)
+  ["\u2014", "\u2015"], // — EM DASH → ― HORIZONTAL BAR (0x815C)
+]);
+
+const CP932_FOLD_PATTERN = new RegExp(`[${[...CP932_EQUIVALENTS.keys()].join("")}]`, "gu");
+
+/** CP932_EQUIVALENTS のキーの文字を値の文字にする。変えた文字 (元の文字。出現ごと) も返す */
+export function foldToCp932(text: string): { text: string; folded: string[] } {
+  const folded: string[] = [];
+  const out = text.replace(CP932_FOLD_PATTERN, (ch) => {
+    folded.push(ch);
+    return CP932_EQUIVALENTS.get(ch) ?? ch;
+  });
+  return { text: out, folded };
+}
+
+/** 文字の一覧を「– (U+2013)」の形で並べる (見分けにくい文字を AI にも利用者にも特定できるように) */
+export function describeChars(chars: readonly string[]): string {
+  return chars
+    .map((ch) => `${ch} (U+${(ch.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")})`)
+    .join(" ");
+}

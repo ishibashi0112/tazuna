@@ -467,3 +467,45 @@ describe("applyCommand: 伏せ字 [MASKED] の案内", () => {
     expect(readFileSync(join(dir, "Db.vb"), "utf8")).toContain('        Log("[MASKED]")');
   });
 });
+
+describe("applyCommand: Shift_JIS のファイルへの「〜」(U+301C)", () => {
+  it("～ (0x8160) として書き、注記を出す。同じ changes.md の再実行は適用済み", async () => {
+    const dir = setupProject();
+    const changesPath = join(dir, "changes.md");
+    writeFileSync(
+      changesPath,
+      doc(
+        "## CHANGES",
+        "",
+        "範囲チェックの追加。",
+        "",
+        "### FILE: legacy.vb (replace)",
+        "<<<<<<< SEARCH",
+        "Dim count As Integer = 1",
+        "=======",
+        "Dim count As Integer = 1",
+        "' 1〜9999 の範囲",
+        ">>>>>>> REPLACE",
+        "",
+      ),
+      "utf8",
+    );
+    const outs: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      outs.push(String(chunk));
+      return true;
+    });
+    try {
+      expect(await applyCommand([changesPath, "--root", dir, "--yes"])).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(new Uint8Array(readFileSync(join(dir, "legacy.vb")))).toEqual(
+      sjis("' コメント\r\nDim count As Integer = 1\r\n' 1～9999 の範囲\r\nEnd Module"),
+    );
+    expect(outs.join("")).toContain("〜 (U+301C) → ～ (U+FF5E)");
+    // 二重適用の防止に止められず、全件適用済みとして終わる
+    expect(await applyCommand([changesPath, "--root", dir, "--yes"])).toBe(0);
+    expect(historyIds(dir)).toHaveLength(1);
+  });
+});

@@ -36,6 +36,7 @@ import {
   type MaskedLine,
 } from "./mask.ts";
 import { analyzeNearest, type NearestAnalysis, type WindowLine } from "./nearest.ts";
+import { describeChars, foldToCp932 } from "./sjis.ts";
 
 export interface NewFileConfig {
   encoding: FileEncoding;
@@ -94,6 +95,8 @@ export interface AppliedBlockInfo {
   restoredMasks?: number;
   /** --literal-masked で [MASKED] の文字のまま書いた数 */
   literalMasks?: number;
+  /** Shift_JIS のファイルのため CP932 の対応する文字にして書いた REPLACE の文字 (元の文字。出現ごと) */
+  sjisFolded?: string[];
 }
 
 /** REPLACE が既にファイル内に存在したためスキップしたブロック (冪等性・成功扱い) */
@@ -122,6 +125,8 @@ export interface FileOutcome {
   restoredMasks?: number;
   /** rewrite / create で --literal-masked により [MASKED] の文字のまま書いた数 */
   literalMasks?: number;
+  /** rewrite / create で、Shift_JIS のため CP932 の対応する文字にして書いた文字 (replace はブロックごとに記録) */
+  sjisFolded?: string[];
   /**
    * 伏せ字を元の値に戻せない変更が同じ回答にあるため、伏せていた値が消えるこのファイルの変更を書かない
    * (--partial でも。戻せない変更が値の移動先のことがあるため)
@@ -216,6 +221,22 @@ function maskFailureMessage(prefix: string, r: MaskRestoreResult & { ok: false }
 type BlockMatch = ReturnType<typeof matchBlock>;
 
 /**
+ * Shift_JIS のファイルに当てる行の「〜」(U+301C) などを、Windows の Shift_JIS (CP932) の対応する文字
+ * (「～」U+FF5E など。sjis.ts の CP932_EQUIVALENTS) にそろえる。Shift_JIS のファイルをデコードした行には
+ * キーの側の文字は現れず、書くときもキーの側の文字は変換できないため、そろえても一致・書き込みの結果が
+ * 悪くなることはない (そろえなければ SEARCH は一致せず、REPLACE は変換できないエラーになる)
+ */
+function foldLinesToCp932(lines: string[]): { lines: string[]; folded: string[] } {
+  const folded: string[] = [];
+  const out = lines.map((line) => {
+    const r = foldToCp932(line);
+    folded.push(...r.folded);
+    return r.text;
+  });
+  return { lines: out, folded };
+}
+
+/**
  * 抜粋の行のうち「複数行にまたがる値を伏せた範囲にかかる行」に印を付ける。伏せ字のある SEARCH は伏せた
  * 表示で照合し、その範囲の行を含む一致は採らない (伏せ字のない SEARCH は実ファイルで照合するので一致する)。
  * そのため、伏せ字を含むその行は SEARCH に含めると必ず一致せず ("always")、伏せ字を含まないその行
@@ -304,6 +325,15 @@ function planReplace(
   const failures: Failure[] = [];
   const applied: AppliedBlockInfo[] = [];
   const already: AlreadyAppliedBlock[] = [];
+  // Shift_JIS のファイルでは SEARCH / REPLACE の「〜」などを CP932 の文字にそろえる (照合・書き込みとも)
+  const sjisTarget = doc.encoding === "shift_jis";
+  const blocks = change.blocks.map((original) => {
+    if (!sjisTarget) return { block: original, folded: [] as string[] };
+    const search = foldLinesToCp932(original.search);
+    const replace = foldLinesToCp932(original.replace);
+    if (search.folded.length === 0 && replace.folded.length === 0) return { block: original, folded: [] };
+    return { block: { ...original, search: search.lines, replace: replace.lines }, folded: replace.folded };
+  });
   let docLines: DocLine[] = doc.lines;
   let textLines: string[] = docLines.map((l) => l.text);
   const original = textLines;
@@ -360,7 +390,7 @@ function planReplace(
     return sets.size;
   };
 
-  for (const block of change.blocks) {
+  for (const { block, folded } of blocks) {
     let m: BlockMatch = matchBlock(textLines, block);
     if (block.search.some(hasMaskToken) && (m.ok || m.reason === "not-found")) {
       // SEARCH の [MASKED] は伏せた表示となら一致する (パックから写した行)。実ファイルで
@@ -504,7 +534,7 @@ function planReplace(
       failures.push({
         path: change.path,
         kind: "unencodable",
-        message: `ブロック ${block.index}: REPLACE 側に Shift_JIS へ変換できない文字が含まれています: ${bad.join(" ")}`,
+        message: `ブロック ${block.index}: REPLACE 側に Shift_JIS へ変換できない文字が含まれています: ${describeChars(bad)}`,
         block,
       });
       continue;
@@ -517,6 +547,7 @@ function planReplace(
       inserted: replacement,
       ...(restoredMasks > 0 ? { restoredMasks } : {}),
       ...(literalMasks > 0 ? { literalMasks } : {}),
+      ...(folded.length > 0 ? { sjisFolded: folded } : {}),
     });
     // 書いた行の provenance: 元の値に戻した行は戻す元の行、SEARCH の範囲の行を (インデント以外)
     // そのまま残した行はその行。どちらでもなければ新しい行
@@ -585,7 +616,8 @@ function planFile(
         if (state.bytes !== null) {
           try {
             const doc = decodeFile(state.bytes);
-            if (contentEqualsStage(doc.lines.map((l) => l.text), change.content) !== null) {
+            const expected = doc.encoding === "shift_jis" ? foldLinesToCp932(change.content).lines : change.content;
+            if (contentEqualsStage(doc.lines.map((l) => l.text), expected) !== null) {
               return fileAlreadyApplied(change);
             }
           } catch {
@@ -610,11 +642,13 @@ function planFile(
         return outcome;
       }
       const createLiteral = maskedContent.reduce((n, line) => n + line.split(MASK_TOKEN).length - 1, 0);
-      const bad = findUnencodable(change.content.join("\n"), newFile.encoding);
+      const created =
+        newFile.encoding === "shift_jis" ? foldLinesToCp932(change.content) : { lines: change.content, folded: [] };
+      const bad = findUnencodable(created.lines.join("\n"), newFile.encoding);
       if (bad.length > 0) {
-        return fileFailure(change, "unencodable", `新規ファイルの既定エンコーディング (${newFile.encoding}) に変換できない文字: ${bad.join(" ")}`);
+        return fileFailure(change, "unencodable", `新規ファイルの既定エンコーディング (${newFile.encoding}) に変換できない文字: ${describeChars(bad)}`);
       }
-      const doc = makeDocument(change.content, newFile);
+      const doc = makeDocument(created.lines, newFile);
       return {
         change,
         failures: [],
@@ -624,6 +658,7 @@ function planFile(
         alreadyApplied: false,
         totalBlocks: 0,
         ...(createLiteral > 0 ? { literalMasks: createLiteral } : {}),
+        ...(created.folded.length > 0 ? { sjisFolded: created.folded } : {}),
       };
     }
     case "rewrite": {
@@ -637,7 +672,10 @@ function planFile(
         return fileFailure(change, "undecodable", e instanceof EncodingError ? e.message : String(e));
       }
       const current = doc.lines.map((l) => l.text);
-      let content = change.content;
+      // Shift_JIS のファイルでは「〜」などを CP932 の文字にそろえる (planReplace と同じ)
+      const rewritten =
+        doc.encoding === "shift_jis" ? foldLinesToCp932(change.content) : { lines: change.content, folded: [] };
+      let content = rewritten.lines;
       let restoredMasks = 0;
       let literalMasks = 0;
       if (content.some(hasMaskToken)) {
@@ -667,7 +705,7 @@ function planFile(
       }
       const bad = findUnencodable(content.join("\n"), doc.encoding);
       if (bad.length > 0) {
-        return fileFailure(change, "unencodable", `Shift_JIS へ変換できない文字が含まれています: ${bad.join(" ")}`);
+        return fileFailure(change, "unencodable", `Shift_JIS へ変換できない文字が含まれています: ${describeChars(bad)}`);
       }
       // 既存のエンコーディング・BOM・支配的 EOL・末尾改行の有無を維持して全文を差し替える (§8)
       const lines: DocLine[] = content.map((text) => ({ text, raw: null, eol: null }));
@@ -682,6 +720,7 @@ function planFile(
         totalBlocks: 0,
         ...(restoredMasks > 0 ? { restoredMasks } : {}),
         ...(literalMasks > 0 ? { literalMasks } : {}),
+        ...(rewritten.folded.length > 0 ? { sjisFolded: rewritten.folded } : {}),
       };
     }
     case "delete": {

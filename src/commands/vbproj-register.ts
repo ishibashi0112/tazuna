@@ -17,6 +17,7 @@ import {
   type DocLine,
   type FileDocument,
 } from "../core/encoding.ts";
+import { describeChars } from "../core/sjis.ts";
 import {
   designerParentName,
   detectSubType,
@@ -155,7 +156,7 @@ export function planVbprojRegistrations(root: string, applicable: FileOutcome[])
     if (bad.length > 0) {
       plan.notes.push({
         file,
-        message: `${lookup.path} (Shift_JIS) に変換できない文字がパスに含まれるため未登録: ${bad.join(" ")}`,
+        message: `${lookup.path} (Shift_JIS) に変換できない文字がパスに含まれるため未登録: ${describeChars(bad)}`,
       });
       continue;
     }
