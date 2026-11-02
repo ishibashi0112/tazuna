@@ -42,6 +42,11 @@ export interface MaskOptions {
    * 設定値の中身のみで、識別子やコード構造は触らない
    */
   strict?: boolean;
+  /**
+   * ファイルのパス(v0.19.0)。コードのファイル(.php / .rb / .rs / .vue など。isCodePath)では YAML などの
+   * `キー: 値` を読まない。省略時(ビルドの出力・docs/ の文書など)は読む
+   */
+  path?: string | undefined;
 }
 
 const MASK = "[MASKED]";
@@ -311,6 +316,150 @@ const DOCKER_ENV = /^((?:ENV|ARG)[ \t]+)((?:[^\r\n]*\\[ \t]*\r?\n)*[^\r\n]*)/gm;
 const DOCKER_PAIR = /(?<![^ \t\r\n])([A-Za-z_][A-Za-z0-9_.-]*)(=)("(?:[^"\\\r\n]|\\.)*"|"[^"\r\n]*"|'[^'\r\n]*'|(?:\\[^\r\n]|[^\s"'\\])*)/g;
 
 /**
+ * YAML・.properties・setup.cfg・HOCON などの、引用符で囲まない `キー: 値`(行の頭のキー。字下げ・一覧の `- ` の後も。
+ * v0.19.0)。値は行末まで(空白の後の # からはコメント)。引用符で囲んだ値は KEY_LITERAL で読む。
+ * コードのファイル(字句解析のない言語)ではオブジェクト・構造体のフィールドと区別できないため使わない(isCodePath)
+ */
+const COLON_PAIR = /^([ \t]*(?:-[ \t]+)?)([A-Za-z_][A-Za-z0-9_.-]*)([ \t]*:[ \t]+)([^\r\n]*)/gm;
+/** YAML の真偽値・空の値 */
+const YAML_NON_VALUE = /^(?:~|null|true|false|yes|no|on|off)$/i;
+/** YAML の `|` / `>` の値(続く字下げの深い行が値) */
+const YAML_BLOCK_SCALAR = /^[|>](?:[-+]?[1-9]?|[1-9][-+])$/;
+/**
+ * 型の名前(文書に書いたコードの `password: string` / `api_key: Option<String>` / `password: varchar(255)`)。
+ * 値がこれらの名前だけ(型の引数・配列・? を含む)なら値ではない
+ */
+const TYPE_LIKE = /^&?(?:'[a-z]+[ \t]+)?(?:mut[ \t]+)?([A-Za-z_][\w.]*)(?:<[^<>\r\n]*>|\[[^\[\]\r\n]*\]|\([\d, ]*\))?\??$/;
+const TYPE_NAMES = new Set([
+  "string",
+  "str",
+  "number",
+  "int",
+  "integer",
+  "long",
+  "short",
+  "float",
+  "double",
+  "decimal",
+  "bool",
+  "boolean",
+  "byte",
+  "bytes",
+  "char",
+  "any",
+  "unknown",
+  "object",
+  "text",
+  "varchar",
+  "varchar2",
+  "nvarchar",
+  "nvarchar2",
+  "uuid",
+  "date",
+  "datetime",
+  "timestamp",
+  "json",
+  "secretstr",
+  "option",
+  "optional",
+  "vec",
+  "list",
+]);
+
+/** 値が型の名前だけか(TYPE_LIKE / TYPE_NAMES) */
+function isTypeName(value: string): boolean {
+  const name = TYPE_LIKE.exec(value)?.[1];
+  return name !== undefined && TYPE_NAMES.has(name.toLowerCase());
+}
+
+/**
+ * 字句解析のない言語のソースのパス(.php / .rb / .rs / .kt / .swift / .vue / .c など)と、言語の分かるソース・.vb。
+ * これらでは `キー: 値`(COLON_PAIR)を読まない(`password: hashedPassword` のようなオブジェクト・構造体の
+ * フィールド・名前付き引数を伏せないように。言語の分かるソースは言語ごとの伏せ方で文字列・コメントの中だけを読む)
+ */
+const CODE_PATH =
+  /\.(?:vb|bas|cls|frm|ctl|php\d?|phtml|inc|rb|rake|gemspec|rs|kt|kts|swift|scala|sc|dart|vue|svelte|astro|c|h|cc|cpp|cxx|hpp|hh|hxx|m|mm|lua|pl|pm|r|ex|exs|erl|hrl|hs|ml|mli|fs|fsx|fsi|clj|cljs|cljc|groovy|gradle|jl|nim|zig|cr|coffee|elm|ps1|psm1|psd1|cshtml|vbhtml|razor|aspx|ascx|jsp|erb|haml|slim|twig)$/i;
+
+function isCodePath(path: string): boolean {
+  return CODE_PATH.test(path) || sourceLanguageOf(path) !== undefined;
+}
+
+/** 行の字下げの幅(空白とタブの数) */
+function indentWidth(line: string): number {
+  return /^[ \t]*/.exec(line)?.[0].length ?? 0;
+}
+
+/**
+ * 引用符で囲まない `キー: 値` の秘密系のキーの値を伏せる(COLON_PAIR)。ユーザー ID 系のキーは伏せない
+ * (`user: deploy` / k8s の `runAsUser: 1000` など、値でないものが多いため)。値でないもの: 空(入れ子)・真偽値・
+ * 差し込み(${DB_PASSWORD} / {{ x }} / <%= ... %> / @x@)・YAML の別名(*x)・タグ(!vault)・入れ物({ / [)・
+ * 型の名前・コードの続き(行末の , ; { ( [ \)・表示の文言(空白・日本語を含む値・キー名そのもの)。
+ * `|` / `>` の値は、続く字下げの深い行をまとめて 1 つの伏せ字にする
+ */
+function maskColonPairs(source: string, findings: MaskFinding[]): string {
+  const pattern = new RegExp(COLON_PAIR.source, COLON_PAIR.flags);
+  let out = "";
+  let last = 0;
+  for (let m = pattern.exec(source); m !== null; m = pattern.exec(source)) {
+    const lead = m[1] ?? "";
+    const key = m[2] ?? "";
+    const sep = m[3] ?? "";
+    const rest = m[4] ?? "";
+    if (kindForConfigKey(key) !== KIND_PASSWORD) continue;
+    // アンカー(password: &pw 値)の後ろが値
+    const anchor = /^&[^\s]+[ \t]+/.exec(rest)?.[0] ?? "";
+    const body = rest.slice(anchor.length);
+    if (/^["']/.test(body)) continue;
+    const value = body.replace(/(?:^|[ \t]+)#.*$/, "").replace(/[ \t]+$/, "");
+    const valueStart = m.index + lead.length + key.length + sep.length + anchor.length;
+    if (YAML_BLOCK_SCALAR.test(value)) {
+      // 続く行のうち、キーの位置より深く字下げした行(間の空行も)が値
+      const lineEnd = m.index + m[0].length;
+      let cursor = lineEnd;
+      let first = -1;
+      let end = -1;
+      while (cursor < source.length) {
+        const next = source.indexOf("\n", cursor + 1);
+        const lineStart = cursor + 1;
+        const line = source.slice(lineStart, next < 0 ? source.length : next).replace(/\r$/, "");
+        if (line.trim() !== "") {
+          if (indentWidth(line) <= lead.length) break;
+          if (first < 0) first = lineStart + indentWidth(line);
+          end = lineStart + line.replace(/[ \t]+$/, "").length;
+        }
+        if (next < 0) break;
+        cursor = next;
+      }
+      if (first < 0 || source.slice(first, end).includes(MASK)) continue;
+      findings.push({ line: lineOf(source, m.index), kind: KIND_PASSWORD });
+      out += `${source.slice(last, first)}${MASK}`;
+      last = end;
+      pattern.lastIndex = Math.max(pattern.lastIndex, end);
+      continue;
+    }
+    if (
+      value === "" ||
+      value.includes(MASK) ||
+      YAML_NON_VALUE.test(value) ||
+      /^[&*!{[(`|>]/.test(value) ||
+      // GitHub Actions の ${{ secrets.X }}・Azure Pipelines の $(X)・Maven の @x@・Symfony の %env(X)% / %x%・
+      // ERB の <%= ... %>・説明の書き方の <password>
+      /^(?:\$\{\{[^\r\n]*\}\}|\$\([\w.]+\)|@[\w.-]+@|%[\w.():-]+%|<[^<>\r\n]*>)$/.test(value) ||
+      /[,;{(\[\\]$/.test(value) ||
+      isTypeName(value) ||
+      isShellVariable(value) ||
+      !isSecretPair(key, value, true)
+    ) {
+      continue;
+    }
+    findings.push({ line: lineOf(source, m.index), kind: KIND_PASSWORD });
+    out += `${source.slice(last, valueStart)}${MASK}`;
+    last = valueStart + value.length;
+  }
+  return out + source.slice(last);
+}
+
+/**
  * バッチファイルの set の始まり(set DB_PASSWORD= / set "DB_PASSWORD= / @set / if ... set / ... & set。字下げした行も。
  * C の文字列の set \"K= / VB・C# の set ""K= / MSBuild の Exec などの XML の set &quot;K= も)。値の終わりは batchValueEnd で決める
  */
@@ -322,7 +471,7 @@ const BATCH_SET = /(?<=^|[ \t@(&|;"'>])([Ss][Ee][Tt][ \t]+)(\\"|""|"|&quot;)?([A
  * (/var/lib/mysql/・mysql.py・MySql.Data)は除く。MSBuild の &quot;...\SQLCMD.EXE&quot; と %SQLCMD% も読む
  */
 const CLI_COMMAND =
-  /(?<![\w.-])(sqlcmd|osql|isql|bcp|mysql|mysqldump|mysqladmin|mysqlimport|net[ \t]+use|schtasks)(?:\.exe)?(?=["'\s,\]%!]|&(?:quot|apos);|$)/gi;
+  /(?<![\w.-])(sqlcmd|osql|isql|bcp|mysql|mysqldump|mysqladmin|mysqlimport|net[ \t]+use|schtasks|sqlplus|exp|imp|expdp|impdp|sqlldr|dgmgrl|rman)(?:\.exe)?(?=["'\s,\]%!]|&(?:quot|apos);|$)/gi;
 /** 引数の区切りの空白(行の継続(バッチの ^ / シェルの \ の後の改行)も) */
 const CLI_SP = String.raw`(?:[ \t]|\^\r?\n|(?<=[ \t])\\\r?\n)+`;
 /** 引用符で囲まない値の文字(行の継続の ^ / \ は値に含めない) */
@@ -330,6 +479,15 @@ const CLI_BARE = (excluded: string): string => String.raw`(?:[^\s"'` + "`" + Str
 /** 引用符で囲んだ値("..." / '...' / MSBuild の &quot;...&quot;) */
 const CLI_QUOTED = String.raw`"(?:[^"\\\r\n]|\\.)*"|'[^'\r\n]*'|&quot;(?:(?!&quot;)[^\r\n])*&quot;`;
 const CLI_VALUE = `${CLI_QUOTED}|${CLI_BARE("")}`;
+/**
+ * Oracle のログオン(ユーザー/パスワード[@接続先])の前の部分: 引数の区切り(空白・VB の Process.Start("sqlplus.exe",
+ * "...") の "," )と、ログオンを囲む引用符(sqlplus "sys/pw@db as sysdba")。ユーザー名は英字で始まるもの(変数の
+ * $DB_USER / %DB_USER% / &1 と、OS 認証の / は除く)か引用符で囲んだもの
+ */
+const ORACLE_GAP = String.raw`["']?(?:${CLI_SP}|[ \t]*,[ \t]*)["']?`;
+const ORACLE_USER = String.raw`(?:[A-Za-z_][\w$#.]*|"[^"\r\n]+")`;
+/** Oracle のログオンのパスワード(引用符で囲んだものか、@ / 空白・引用符・/ の前まで) */
+const ORACLE_PASSWORD = String.raw`"[^"\r\n]*"|[^\s"'@\/]+`;
 /** コマンドの種類ごとの、パスワードの引数(lead = 値の前、value = 値) */
 const CLI_ARGS: ReadonlyArray<readonly [RegExp, readonly RegExp[]]> = [
   [
@@ -366,6 +524,27 @@ const CLI_ARGS: ReadonlyArray<readonly [RegExp, readonly RegExp[]]> = [
     ],
   ],
   [/^schtasks$/i, [new RegExp(String.raw`((?<=\s)\/(?:rp|p)${CLI_SP})(?!\/)(${CLI_VALUE})`, "gi")]],
+  // Oracle のログオン(v0.19.0): sqlplus / exp / imp / expdp / impdp / sqlldr / dgmgrl の最初の引数(-S などの
+  // オプションの後)の ユーザー/パスワード[@接続先] と userid=...、rman の target / catalog / auxiliary の後
+  [
+    /^(?:sqlplus|exp|imp|expdp|impdp|sqlldr|dgmgrl)$/i,
+    [
+      new RegExp(
+        String.raw`(^[A-Za-z]+(?:\.exe)?${ORACLE_GAP}(?:-[A-Za-z]+${ORACLE_GAP})*["']?${ORACLE_USER}\/)(${ORACLE_PASSWORD})`,
+        "i",
+      ),
+      new RegExp(String.raw`((?<=[\s"',])userid=["']?${ORACLE_USER}\/)(${ORACLE_PASSWORD})`, "gi"),
+    ],
+  ],
+  [
+    /^rman$/i,
+    [
+      new RegExp(
+        String.raw`((?<=\s)(?:target|catalog|auxiliary)(?:${CLI_SP}|=)["']?${ORACLE_USER}\/)(${ORACLE_PASSWORD})`,
+        "gi",
+      ),
+    ],
+  ],
 ];
 /** コマンド名のない引数の文字列(ProcessStartInfo.Arguments = "-S srv -U sa -P ...")の -U ユーザー -P パスワード */
 const CLI_USER_PASSWORD = new RegExp(
@@ -575,8 +754,27 @@ const KEY_LITERAL = new RegExp(
   String.raw`((?<![A-Za-z0-9_$.])[A-Za-z_$][A-Za-z0-9_$.]*|"[^"\r\n]*"|'[^'\r\n]*')` +
     String.raw`(\s*(?:(?<=[ \t])[Aa][Ss][ \t]+[A-Za-z_][\w.]*(?:\(\))?[ \t]*=(?!=)` +
     String.raw`|\{[ \t]*get;[ \t]*(?:(?:(?:public|private|protected|internal)[ \t]+)*(?:set|init);[ \t]*)?\}[ \t]*=(?!=)` +
-    String.raw`|:=|:|=(?!=))\s*)` +
+    String.raw`|=>|:=|:|=(?!=))\s*)` +
     KEY_VALUE,
+  "g",
+);
+
+/**
+ * 添字への代入(v0.19.0): $config['db']['password'] = '...' / os.environ["DB_PASSWORD"] = "..." / cfg["apiKey"] = '...'。
+ * 添字の文字列をキーとして KEY_LITERAL と同じく判定する
+ */
+const SUBSCRIPT_LITERAL = new RegExp(
+  String.raw`(\[[ \t]*)("[^"\r\n]*"|'[^'\r\n]*')([ \t]*\][ \t]*=(?![=>])[ \t]*)` + KEY_VALUE,
+  "g",
+);
+
+/**
+ * 秘密の名前を最初の引数に渡す関数の 2 番目の文字列(v0.19.0): define('DB_PASSWORD', '...') /
+ * env('DB_PASSWORD', '既定値') / os.environ.get("DB_PASSWORD", "既定値") / System.getProperty("db.password", "既定値")。
+ * 最初の引数はキーの形の文字列(空白を含まない)だけ
+ */
+const NAMED_ARG_LITERAL = new RegExp(
+  String.raw`(\([ \t]*)("[A-Za-z_][\w.-]*"|'[A-Za-z_][\w.-]*')([ \t]*,[ \t]*)` + KEY_VALUE + String.raw`(?=[ \t]*[,)])`,
   "g",
 );
 
@@ -616,7 +814,28 @@ const WEAK_KEY_WORDS = new Set(["token", "credential", "credentials"]);
 
 /** 秘密ではない値: 真偽値(SavePassword = True / RequireToken = "true" などの設定)と書式の差し込みだけの値 */
 function isNonSecretValue(value: string): boolean {
-  return /^(?:true|false)$/i.test(value.trim()) || isPlaceholderOnly(value);
+  return (
+    /^(?:true|false)$/i.test(value.trim()) ||
+    isPlaceholderOnly(value) ||
+    isValidationRules(value) ||
+    // Laravel のモデルの型変換('password' => 'hashed')
+    /^(?:hashed|encrypted)$/.test(value)
+  );
+}
+
+/** 入力の検証の規則の名前(Laravel など) */
+const VALIDATION_RULE =
+  /^(?:bail|required|nullable|sometimes|present|filled|confirmed|string|integer|numeric|alpha|alpha_num|alpha_dash|ascii|email|boolean|uuid|min|max|between|size|digits|digits_between|regex|not_regex|same|different|current_password|password|letters|mixed_case|numbers|symbols|uncompromised|required_with|required_if|required_unless|exclude|prohibited)(?::[^|\r\n]*)?$/;
+
+/**
+ * 入力の検証の規則だけでできた値(v0.19.0。Laravel などの 'password' => 'required|string|min:8|confirmed')。秘密の値では
+ * ない。規則が 1 つだけの値は、パスワードにはまず使わない名前(required / nullable / sometimes / confirmed)だけ
+ */
+function isValidationRules(value: string): boolean {
+  const rules = value.split("|");
+  return rules.length > 1
+    ? rules.every((rule) => VALIDATION_RULE.test(rule))
+    : /^(?:required|nullable|sometimes|confirmed)$/.test(value);
 }
 
 /**
@@ -860,6 +1079,74 @@ function isPartlyMasked(token: string): boolean {
 /** PRIVATE KEY ブロック(BEGIN/END 行は残し中身をマスク) */
 const PRIVATE_KEY_BLOCK =
   /(-----BEGIN [A-Z ]*PRIVATE KEY-----)[\s\S]+?(-----END [A-Z ]*PRIVATE KEY-----)/g;
+
+/**
+ * SQL*Plus / RMAN のスクリプトの CONNECT 行(v0.19.0): CONNECT ユーザー/パスワード[@接続先] [AS SYSDBA] / CONN ... /
+ * CONNECT TARGET ...。行がその文だけのもの(「Connect to/from the server」のような文章を読まない)
+ */
+const ORACLE_CONNECT = new RegExp(
+  String.raw`^([ \t]*conn(?:ect)?[ \t]+(?:(?:target|catalog|auxiliary)[ \t]+)?["']?${ORACLE_USER}\/)` +
+    String.raw`("[^"\r\n]*"|[^\s"'@\/;]+)` +
+    String.raw`(?=(?:@[^\s;"']+)?["']?(?:[ \t]+as[ \t]+sys\w+)?[ \t]*;?[ \t]*(?:--[^\r\n]*)?\r?$)`,
+  "gim",
+);
+
+/**
+ * SQL のパスワードの句(v0.19.0): Oracle / MySQL の IDENTIFIED BY 値(IDENTIFIED WITH 方式 BY 値・
+ * IDENTIFIED BY VALUES 'ハッシュ' も)と、PostgreSQL の [WITH | LOGIN | USER 名 | ROLE 名] [ENCRYPTED] PASSWORD '値'。
+ * VB / Java などの文字列の中の SQL も読む(値は文字列を閉じる引用符の前まで)
+ */
+const SQL_IDENTIFIED_BY =
+  /\b(IDENTIFIED(?:[ \t]+WITH[ \t]+[\w$]+)?[ \t]+BY[ \t]+(?:VALUES[ \t]+)?)('(?:[^'\r\n]|'')*'|"[^"\r\n]*"|[^\s;'",)]+)/gi;
+/**
+ * IDENTIFIED BY の前のユーザー・ロールの名前(CREATE USER 名 / ALTER ROLE 名 / GRANT ... TO 名 / CONNECT TO 名 /
+ * MySQL の 'u'@'h')。小文字の identified by はこれが前にあるときだけ SQL とみなす(文章の「identified by a single
+ * character」を読まない)。大文字の IDENTIFIED BY は前を問わない(VB の "CREATE USER " & u & " IDENTIFIED BY ..." も)
+ */
+const SQL_GRANTEE_BEFORE =
+  /\b(?:user|role|to)[ \t]+(?:if[ \t]+(?:not[ \t]+)?exists[ \t]+)?(?:"[^"\r\n]+"|'[^'\r\n]+'(?:@'[^'\r\n]*')?|`[^`\r\n]+`(?:@`[^`\r\n]*`)?|[\w$#.]+(?:@[\w%.]+)?)[ \t]+$/i;
+const SQL_PASSWORD =
+  /\b((?:WITH|LOGIN|USER[ \t]+[\w$."`]+|ROLE[ \t]+[\w$."`]+)(?:[ \t]+(?:LOGIN|NOLOGIN|SUPERUSER|NOSUPERUSER|CREATEDB|CREATEROLE|INHERIT|NOINHERIT|REPLICATION))*[ \t]+(?:ENCRYPTED[ \t]+)?PASSWORD[ \t]+)('(?:[^'\r\n]|'')*')/gi;
+
+/**
+ * SQL のパスワードの句の値のうち伏せないもの: 変数・差し込み・バインド変数(&pw / :pw / ? / %s / {0} / ${x})・
+ * 説明の書き方(<password> / [password] / password)・コードの連結(' + pw + ' / " & pw & ")
+ */
+function isSqlNonSecret(value: string): boolean {
+  const quote = /^['"]/.test(value) && value.length >= 2 && value.endsWith(value.charAt(0)) ? value.charAt(0) : "";
+  const inner = quote === "" ? value : value.slice(1, -1);
+  return (
+    isCliNonSecret(value) ||
+    /^(?::[A-Za-z_]\w*|\?|&\w+\.?|@\w+)$/.test(inner) ||
+    /^(?:password|passwd|pwd|pass|new_password|newpassword)$/i.test(inner) ||
+    (quote !== "" && /["'`]/.test(inner))
+  );
+}
+
+/** Oracle の CONNECT 行と SQL のパスワードの句の値を伏せる(VB のソースと汎用テキストの両方) */
+function maskSqlCredentials(source: string, findings: MaskFinding[]): string {
+  let result = source.replace(ORACLE_CONNECT, (whole, lead: string, value: string, offset: number) => {
+    if (isCliNonSecret(value) || /^&/.test(value)) return whole;
+    findings.push({ line: lineOf(source, offset), kind: KIND_PASSWORD });
+    const quote = /^"/.test(value) ? '"' : "";
+    return `${lead}${quote}${MASK}${quote}`;
+  });
+  for (const pattern of [SQL_IDENTIFIED_BY, SQL_PASSWORD]) {
+    const before = result;
+    result = before.replace(pattern, (whole, lead: string, value: string, offset: number) => {
+      if (value.includes(MASK) || isSqlNonSecret(value)) return whole;
+      if (pattern === SQL_IDENTIFIED_BY && !lead.startsWith("IDENTIFIED")) {
+        // 行の頭から(長い行は直前の 300 文字)。行の頭は lastIndexOf で探す(文章に多いときに遅くならないように)
+        const lineStart = Math.max(before.lastIndexOf("\n", offset - 1) + 1, offset - 300, 0);
+        if (!SQL_GRANTEE_BEFORE.test(before.slice(lineStart, offset))) return whole;
+      }
+      findings.push({ line: lineOf(before, offset), kind: KIND_PASSWORD });
+      const quote = /^['"]/.test(value) && value.length >= 2 ? value.charAt(0) : "";
+      return `${lead}${quote}${MASK}${quote}`;
+    });
+  }
+  return result;
+}
 
 /**
  * 高エントロピー文字列の候補(英数と base64/URL-safe 記号の 20 文字以上)。
@@ -1309,6 +1596,7 @@ function maskGenericText(
   content: string,
   findings: MaskFinding[],
   strict: boolean,
+  colonPairs = true,
 ): string {
   // .NET の設定ファイルの appSettings / My.Settings(キー名と値が別の属性・要素にある)
   let result = maskConfigAdds(content, findings, (index) => lineOf(content, index));
@@ -1408,6 +1696,10 @@ function maskGenericText(
     const shown = quoted ? `${quote}${MASK}${quote}` : MASK;
     return `${lead}${key}${eq}${rest.slice(0, at)}${shown}${rest.slice(at + value.length)}${closing}`;
   });
+  // YAML・.properties・setup.cfg などの引用符で囲まない `キー: 値`(コードのファイルでは読まない)
+  if (colonPairs) {
+    result = maskColonPairs(result, findings);
+  }
   // バッチファイルの set(値の空白も値のうちなので表示の文言とはみなさない)。SQL の SET を飛ばしたときと、文字列・
   // 括弧の中で値を途中で終えたときは、その後ろから続けて探す(同じ行の後ろの set も読む)
   {
@@ -1535,6 +1827,22 @@ function maskGenericText(
   };
   // キーと文字列の値("password": "..." / dbPassword = "..." / { apiKey: '...' } / password: string = "...")
   result = result.replace(KEY_LITERAL, maskKeyLiteral);
+  // 添字への代入と、秘密の名前を最初の引数に渡す関数の 2 番目の文字列(型の名前・表示の文言は除く)
+  for (const pattern of [SUBSCRIPT_LITERAL, NAMED_ARG_LITERAL]) {
+    result = result.replace(
+      pattern,
+      (whole: string, open: string, key: string, sep: string, literal: string, offset: number) => {
+        const prefix = /^[^"']*/.exec(literal)?.[0] ?? "";
+        const quote = literal.charAt(prefix.length);
+        const inner = literal.slice(prefix.length + 1, -1);
+        if (!isSecretPair(key.slice(1, -1), inner) || isTypeName(inner)) {
+          return whole;
+        }
+        findings.push({ line: lineOf(result, offset), kind: KIND_PASSWORD });
+        return `${open}${key}${sep}${prefix}${quote}${MASK}${quote}`;
+      },
+    );
+  }
   // : の後に空白のない注釈は、token などのキーでは型が文字列のときだけ(last_synced_token:label="..." は書式指定)
   result = result.replace(KEY_LITERAL_TYPED, (whole: string, key: string, sep: string, literal: string, offset: number) =>
     /:[^ \t]/.test(sep) && !hasStrongSecretWord(key) && !/:(?:str|string|String|bytes|SecretStr|Optional\b)/.test(sep)
@@ -1559,11 +1867,13 @@ export function maskCredentials(content: string, options: MaskOptions): MaskResu
   const strict = options.strict ?? true;
   let result = options.vbSource
     ? maskVbSource(content, findings, strict)
-    : maskGenericText(content, findings, strict);
+    : maskGenericText(content, findings, strict, options.path === undefined || !isCodePath(options.path));
   if (options.vbSource) {
     // VB の文字列の中のコマンド(Shell("net use ...") / Process.Start("sqlcmd.exe", "-S srv -P ..."))
     result = maskCliArgs(result, findings);
   }
+  // SQL*Plus の CONNECT 行・SQL の IDENTIFIED BY / PASSWORD の句(スクリプトとコードの文字列の中)
+  result = maskSqlCredentials(result, findings);
 
   // ファイル種別によらない汎用シークレット形式
   result = result.replace(
@@ -1712,6 +2022,7 @@ interface MaskMode {
   vbSource: boolean;
   strict: boolean;
   language?: SourceLanguage | undefined;
+  path?: string | undefined;
 }
 
 /** 伏せた範囲 (元の文字列の位置。tokens は隣り合った伏せ字をまとめた数) */
@@ -1727,11 +2038,11 @@ interface MaskSpan {
  */
 function maskModes(path: string, stricts: boolean[]): MaskMode[] {
   const vbs = /\.vb$/i.test(path) ? [true, false] : [false];
-  const modes: MaskMode[] = vbs.flatMap((vbSource) => stricts.map((strict) => ({ vbSource, strict })));
+  const modes: MaskMode[] = vbs.flatMap((vbSource) => stricts.map((strict) => ({ vbSource, strict, path })));
   // 言語の分かるソースは、言語ごとの伏せ方 (tazuna pack) と汎用テキストの伏せ方 (旧 slnmix のパック) の両方
   const language = sourceLanguageOf(path);
   if (language !== undefined) {
-    modes.push(...stricts.map((strict) => ({ vbSource: false, strict, language })));
+    modes.push(...stricts.map((strict) => ({ vbSource: false, strict, language, path })));
   }
   return modes;
 }
@@ -1873,7 +2184,9 @@ function displaySpans(text: string, options: MaskLinesOptions): MaskSpan[] | nul
   const stricts = (options.strict ?? true) ? [true, false] : [false];
   const vbSource = options.vbSource;
   const modes =
-    vbSource === undefined ? maskModes(options.path, stricts) : stricts.map((strict) => ({ vbSource, strict }));
+    vbSource === undefined
+      ? maskModes(options.path, stricts)
+      : stricts.map((strict) => ({ vbSource, strict, path: options.path }));
   for (const mode of modes) {
     const spans = maskedSpans(text, mode);
     if (spans === null) return null;

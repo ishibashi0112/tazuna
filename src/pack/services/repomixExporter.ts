@@ -337,7 +337,12 @@ function buildUiSummaryEntry(
     const masked =
       language === "vb"
         ? maskCredentials(source, { vbSource: true, strict: strictMask })
-        : maskCredentials(source, { vbSource: false, language: sourceLanguageOf(fileName), strict: strictMask });
+        : maskCredentials(source, {
+            vbSource: false,
+            language: sourceLanguageOf(fileName),
+            strict: strictMask,
+            path: fileName,
+          });
     source = masked.content;
     findings = masked.findings;
   }
@@ -619,6 +624,7 @@ export function buildRepomixOutput(
           vbSource: /\.vb$/i.test(displayPath),
           language: sourceLanguageOf(displayPath),
           strict: strictMask,
+          path: displayPath,
         });
         content = masked.content;
         if (masked.findings.length > 0) {
@@ -766,6 +772,7 @@ export function buildRepomixOutput(
             vbSource: false,
             language: sourceLanguageOf(file.relativePath),
             strict: strictMask,
+            path: file.relativePath,
           });
           content = masked.content;
           if (masked.findings.length > 0) {
