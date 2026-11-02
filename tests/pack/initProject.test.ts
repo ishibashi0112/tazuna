@@ -202,6 +202,29 @@ suite("initProject", () => {
     assert.ok(fs.logs.some((line) => line.includes("2 段以上深い") && line.includes('"target"')));
   });
 
+  test("git の一覧が取れれば、言語・include・exclude・入れないもの・大きさの目安を表示し、docs 設定と並べて書く(0.18.0)", () => {
+    const fs = fakeFs([".git/"], { "app/main.py": "print(1)\n", "static/lib.min.js": "x\n", "keys/dev.pem": "k\n" });
+    fs.deps.listPackableGitFiles = () =>
+      ["app/main.py", "static/lib.min.js", "keys/dev.pem"].map((relativePath) => ({ relativePath, size: 300_000 }));
+    fs.deps.readHead = (p) => fs.files.get(path.resolve(p));
+    const result = initProject(REPO, fs.deps);
+    assert.deepStrictEqual(result, { exitCode: 0, layout: "generic" });
+    assert.deepStrictEqual(readJson(fs, "tazuna.config.json"), {
+      kind: "generic",
+      include: ["**/*.py", "**/*.md", "**/.gitignore", "tazuna.config.json"],
+      docs: DOCS_CONFIG,
+    });
+    const text = fs.logs.join("\n");
+    assert.ok(text.includes("git が管理しているファイルの拡張子を見て tazuna.config.json を作りました"));
+    assert.ok(text.includes("   言語: Python 1 件"));
+    assert.ok(text.includes("   include: **/*.py, **/*.md, **/.gitignore, tazuna.config.json"));
+    assert.ok(text.includes("   入れないもの: .pem 1 件(鍵・証明書・認証情報のファイル。例: keys/dev.pem)"));
+    // 中身が大きければ、貼り付けの上限を超える見込みと大きいものを示す
+    assert.ok(text.includes("   ファイルの中身: 1 件・約 300K 文字。手順文などを足すと貼り付けの上限の目安"));
+    assert.ok(text.includes("   大きいもの: app/main.py(約 300K 文字)。要らなければ exclude に足してください"));
+    assert.ok(text.includes("kind・include・exclude の代わりに"));
+  });
+
   test(".sln / .vbproj も git も無ければ、候補のディレクトリで generic 構成(--init-config と同じ)を作る", () => {
     const fs = fakeFs(["src/", "tests/", "package.json"]);
     const result = initProject(REPO, fs.deps);

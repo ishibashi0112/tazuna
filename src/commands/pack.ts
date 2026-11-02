@@ -8,7 +8,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseArgs } from "node:util";
-import { INIT_COMMAND, LEGACY_STATE_DIRECTORY, PACK_COMMAND, STATE_DIRECTORY, TOOL_NAME } from "../brand.ts";
+import { INIT_COMMAND, PACK_COMMAND, TOOL_NAME } from "../brand.ts";
 import { writeClipboardSync } from "../infra/clipboard.ts";
 import { err } from "../infra/term.ts";
 import { maskCredentials } from "../core/mask.ts";
@@ -23,9 +23,9 @@ import { describeAutoTests, detectAutoTests } from "../pack/autoTests.ts";
 import { describeDbSchema, resolveDbSchema } from "../pack/dbChecks.ts";
 import { buildDesignerFileMatcher } from "../pack/designerFileFilter.ts";
 import { decideMode, describeDocs, resolveDocs, type DocsResolution } from "../pack/docs.ts";
-import { planHandoff } from "../pack/handoff.ts";
+import { PASTE_LIMIT_CHARS, planHandoff } from "../pack/handoff.ts";
 import { initConfig } from "../pack/initConfig.ts";
-import { findRepositoryRoot } from "../pack/initProject.ts";
+import { describeCreatedGenericConfig, findRepositoryRoot, GENERATED_OUTPUTS } from "../pack/initProject.ts";
 import { initDocs } from "../pack/initDocs.ts";
 import { describeInstruction, resolveInstructionFile } from "../pack/instructionFile.ts";
 import {
@@ -38,7 +38,7 @@ import {
   type TaskResolution,
 } from "../pack/procedureFile.ts";
 import { DOC_TEMPLATES_DIR } from "../pack/assets/docTemplates.ts";
-import { buildRepomixOutput, type RepomixSource } from "../pack/services/repomixExporter.ts";
+import { buildRepomixOutput, formatLabelCounts, type RepomixSource } from "../pack/services/repomixExporter.ts";
 import { CONFIG_FILE_NAME, configFileNameIn, LEGACY_CONFIG_FILE_NAME, loadSlnmixConfig } from "../pack/slnmixConfig.ts";
 import { projectLanguageOf, type ProjectLanguage } from "../pack/projectLanguage.ts";
 import { parseSln } from "../pack/slnParser.ts";
@@ -50,10 +50,15 @@ import {
   FS_DEPS,
   isDirectoryPath,
   isFilePath,
+  listDirectoryFilesForInit,
+  listDirectoryNames,
   listGitFiles,
+  listPackableGitFiles,
   printDiagnostics,
+  readFileHead,
   readSourceTextFile,
   resolveTargetAndRoot,
+  withoutOwnFiles,
 } from "./pack-io.ts";
 
 export const PACK_USAGE = `使い方:
@@ -101,7 +106,8 @@ export const PACK_USAGE = `使い方:
                         design モードで対象の設計書を指定
       --init-docs       docs/ 連携だけを設定する(${INIT_COMMAND} に含まれる)
       --init-config     .sln の無いプロジェクト向けの ${CONFIG_FILE_NAME}
-                        (kind: "generic")だけを作る(${INIT_COMMAND} に含まれる)
+                        (kind: "generic"。拡張子を見て include / exclude を書く)
+                        だけを作る(${INIT_COMMAND} に含まれる)
       --plan <file>     implement モードで承認済みの方針を <plan> として同梱する
       --procedure-file <path>
                         作業手順文を明示指定(既定: ルートの procedure.md。なければ内蔵既定文)
@@ -122,11 +128,6 @@ M365 Copilot Chat への渡し方:
   Copilot が「埋め込み指示」として無視するため、手順文・規約文は本文側で渡す
 `;
 
-/**
- * M365 Copilot Chat の入力欄に貼れる上限の目安(文字)。超えると送信ボタンが
- * 非活性になる(2026-09-12 実測: 約 120K 文字。設計書 §15.1)
- */
-const PASTE_LIMIT_CHARS = 120_000;
 
 /** パックの出力パスから本文用テキストの既定パスを作る(拡張子を .prompt.md に) */
 function defaultPromptPath(outputPath: string): string {
@@ -271,6 +272,14 @@ export function packCommand(argv: string[]): number {
         isFile: isFilePath,
         listFileNames: FS_DEPS.listFileNames,
         writeTextFile: (p, content) => fs.writeFileSync(p, content, "utf8"),
+        listPackableGitFiles: (rootDir) =>
+          listPackableGitFiles(
+            rootDir,
+            GENERATED_OUTPUTS.map((name) => path.join(rootDir, name)),
+          ),
+        listDirectoryFiles: listDirectoryFilesForInit,
+        listDirectoryNames,
+        readHead: readFileHead,
       },
       { gitRepository: findRepositoryRoot(initRoot, (p) => fs.existsSync(p)) !== undefined },
     );
@@ -283,17 +292,15 @@ export function packCommand(argv: string[]): number {
       return 0;
     }
     err(`作成: ${result.path}`);
-    if (result.roots.length === 0) {
-      err(
-        `以後は同じ場所で npx ${PACK_COMMAND} を実行すると、git が管理しているファイルでパックと本文用テキストを作ります。対象を絞るときは .repomixignore に除外を書くか、extraRoots にディレクトリを書いてください。`,
-      );
-      return 0;
-    }
-    for (const root of result.roots) {
-      err(`  extraRoots: ${root.path}/(kind: "${root.kind}")`);
+    for (const line of describeCreatedGenericConfig(result, path.basename(result.path))) {
+      err(`  ${line}`);
     }
     err(
-      `以後は同じ場所で npx ${PACK_COMMAND} を実行すると、extraRoots のディレクトリだけでパックと本文用テキストを作ります。対象を増やすときは extraRoots に path を追記してください。`,
+      result.roots.length === 0
+        ? `以後は同じ場所で npx ${PACK_COMMAND} を実行すると、git が管理しているファイル${
+            result.plan === undefined ? "" : "のうち include に一致するもの"
+          }でパックと本文用テキストを作ります。`
+        : `以後は同じ場所で npx ${PACK_COMMAND} を実行すると、extraRoots のディレクトリだけでパックと本文用テキストを作ります。対象を増やすときは extraRoots に path を追記してください。`,
     );
     return 0;
   }
@@ -384,21 +391,12 @@ export function packCommand(argv: string[]): number {
     // パック自身の出力(前回の分)は入れない(.gitignore に書いていなくても。本家 repomix と同じ)
     const defaultOutput = path.join(rootDir, "repomix-output.xml");
     const outputFile = path.resolve(values.output ?? defaultOutput);
-    const ownOutputs = new Set(
-      [
-        defaultOutput,
-        defaultPromptPath(defaultOutput),
-        outputFile,
-        values["prompt-output"] === undefined ? defaultPromptPath(outputFile) : path.resolve(values["prompt-output"]),
-      ].map((p) => path.relative(rootDir, p).split(path.sep).join("/").toLowerCase()),
-    );
-    // 適用の履歴と PC ごとの設定(.tazuna/・旧版の .petari/)も入れない(.gitignore に書いていなくても。
-    // 履歴は書き換え前後のファイルの写しと changes.md なので、入れると同じコードが重複する)
-    const stateDirectories = [STATE_DIRECTORY, LEGACY_STATE_DIRECTORY].map((d) => `${d.toLowerCase()}/`);
-    gitFiles = listed.files.filter((file) => {
-      const lower = file.toLowerCase();
-      return !ownOutputs.has(lower) && !stateDirectories.some((d) => lower.startsWith(d));
-    });
+    gitFiles = withoutOwnFiles(rootDir, listed.files, [
+      defaultOutput,
+      defaultPromptPath(defaultOutput),
+      outputFile,
+      values["prompt-output"] === undefined ? defaultPromptPath(outputFile) : path.resolve(values["prompt-output"]),
+    ]);
   }
   if (layout === "solution" && config.kind === "generic") {
     err(
@@ -407,6 +405,12 @@ export function packCommand(argv: string[]): number {
   }
   if (config.sources.length > 0) {
     const parts = [gitFiles !== undefined ? "git が管理しているファイル" : `extraRoots ${config.extraRoots.length} 件`];
+    if (gitFiles !== undefined && config.include !== undefined) {
+      parts.push(`include ${config.include.length} 件`);
+    }
+    if (gitFiles !== undefined && config.exclude.length > 0) {
+      parts.push(`exclude ${config.exclude.length} 件`);
+    }
     if (config.contractSchema !== undefined) {
       parts.push(`契約スキーマ ${config.contractSchema}`);
     }
@@ -459,6 +463,8 @@ export function packCommand(argv: string[]): number {
       extraRoots: config.extraRoots,
       gitFiles,
       gitFilesShownElsewhere: (relativePath) => shownElsewhere.get(relativePath.toLowerCase()),
+      gitInclude: config.include,
+      gitExclude: config.exclude,
       configFileName: configName,
       contractSchema: config.contractSchema,
       contractFile: config.contractFile,
@@ -468,6 +474,18 @@ export function packCommand(argv: string[]): number {
     },
   );
   printDiagnostics("出力", output.diagnostics);
+  // include に一致しないもの(新しく足した言語のファイルなど)に気づけるよう、件数と拡張子を出す
+  const filtered = output.gitFilesFiltered;
+  if (filtered !== undefined && (filtered.notIncluded > 0 || filtered.excluded > 0)) {
+    err(
+      `設定で入れていないファイル: ${[
+        ...(filtered.notIncluded > 0
+          ? [`include に一致しない ${filtered.notIncluded} 件(${formatLabelCounts(filtered.notIncludedByLabel)})`]
+          : []),
+        ...(filtered.excluded > 0 ? [`exclude に一致 ${filtered.excluded} 件`] : []),
+      ].join("、")}`,
+    );
+  }
   if (layout === "generic" && output.fileCount === 0) {
     err(
       gitFiles !== undefined

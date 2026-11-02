@@ -176,6 +176,47 @@ suite("extraRootsCollector: git が管理しているファイル(設計書 §25
     assert.deepStrictEqual(result.files.map((f) => f.relativePath), ["src/app.py"]);
   });
 
+  test("設定の include / exclude で絞る。外したものは件数と拡張子ごとの内訳だけ残す(v0.18.0)", () => {
+    const result = collectGitFiles(ROOT, Object.keys(sizes), deps, {
+      include: ["**/*.py", "**/*.ts", "**/*.md"],
+      exclude: ["src/api/**"],
+    });
+    assert.deepStrictEqual(
+      result.files.map((f) => f.relativePath),
+      ["README.md", "src/app.py"],
+    );
+    assert.deepStrictEqual(result.filtered, {
+      notIncluded: 3,
+      notIncludedByLabel: [
+        { label: ".csv", count: 2 },
+        { label: "sub", count: 1 },
+      ],
+      excluded: 1,
+    });
+    // バイナリ・ロックファイル・ignore は、設定によらず理由を 1 件ずつ残す(include の判定より前)。
+    // 大きさは include に一致したものだけ見る
+    const reasons = Object.fromEntries(result.skipped.map((s) => [s.relativePath, s.reason]));
+    assert.match(reasons["package-lock.json"] ?? "", /ロックファイル/);
+    assert.match(reasons["assets/logo.png"] ?? "", /バイナリ/);
+    assert.match(reasons["secret/notes.txt"] ?? "", /\.repomixignore/);
+    assert.strictEqual(reasons["data/huge.csv"], undefined);
+    assert.ok(
+      result.diagnostics.some((d) =>
+        d.message.includes("既定の除外 0 件、include に一致しない 3 件、exclude に一致 1 件、その他の除外 4 件"),
+      ),
+    );
+  });
+
+  test("include / exclude が無ければ絞らない(filtered なし。診断の文面も v0.17.0 と同じ)", () => {
+    const result = collectGitFiles(ROOT, ["src/app.py", "data/small.csv"], deps);
+    assert.strictEqual(result.filtered, undefined);
+    assert.deepStrictEqual(result.files.map((f) => f.relativePath), ["data/small.csv", "src/app.py"]);
+    assert.deepStrictEqual(
+      result.diagnostics.map((d) => d.message),
+      ["git が管理しているファイル: 2 件(既定の除外 0 件、その他の除外 0 件)"],
+    );
+  });
+
   test("isLockFile は大文字小文字を区別しない", () => {
     assert.strictEqual(isLockFile("Cargo.lock"), true);
     assert.strictEqual(isLockFile("lock.ts"), false);

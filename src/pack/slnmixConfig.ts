@@ -114,6 +114,14 @@ export interface SlnmixConfig {
    */
   target?: string | undefined;
   extraRoots: ExtraRootConfig[];
+  /**
+   * git が管理しているファイルを対象にするとき(generic 構成で extraRoots が無いとき)の、ルート相対の
+   * include グロブ。一致するものだけを入れる。無ければ(undefined)すべて(既定の除外を除く)。
+   * tazuna init が実際にあるファイルの拡張子から書く(v0.18.0。includePlanner.ts)
+   */
+  include?: string[] | undefined;
+  /** 同じく exclude グロブ(既定の除外に追加) */
+  exclude: string[];
   /** docs/ 連携の設定(なければ undefined = 連携なし) */
   docs?: DocsConfig | undefined;
   /** contract.schema.json のルート相対パス(なければ undefined) */
@@ -339,6 +347,37 @@ function parseDocsConfig(
   return { design: pick("design"), spec: pick("spec"), handoff: pick("handoff") };
 }
 
+/** トップレベルの include / exclude(git が管理しているファイルの絞り込み) */
+function parseGitFilters(
+  parsed: Record<string, unknown>,
+  fileName: string,
+  diagnostics: ParseDiagnostic[],
+): { present: boolean; include?: string[] | undefined; exclude: string[] } {
+  const read = (key: "include" | "exclude"): string[] | undefined => {
+    const value = parsed[key];
+    if (value === undefined) {
+      return undefined;
+    }
+    const list = asStringArray(value);
+    if (list === undefined) {
+      diagnostics.push({
+        severity: "warning",
+        message: `${fileName}: ${key} は文字列の配列で指定してください(無視します)`,
+      });
+      return undefined;
+    }
+    return list.map((glob) => normalizeGlobPath(glob.trim())).filter((glob) => glob !== "");
+  };
+  const include = read("include");
+  const exclude = read("exclude");
+  return {
+    present: parsed["include"] !== undefined || parsed["exclude"] !== undefined,
+    // 空の include は「何も入れない」ではなく指定なしとみなす(extraRoots の include と同じ)
+    include: include !== undefined && include.length > 0 ? include : undefined,
+    exclude: exclude ?? [],
+  };
+}
+
 /** `kind`: "solution" / "generic"。それ以外は警告して既定の "solution" */
 function parseKind(value: unknown, fileName: string, diagnostics: ParseDiagnostic[]): ConfigKind {
   if (value === undefined) {
@@ -399,6 +438,7 @@ export function loadSlnmixConfig(
   const config: SlnmixConfig = {
     kind: "solution",
     extraRoots: [],
+    exclude: [],
     generatedDirs: [],
     sources: [],
   };
@@ -448,7 +488,23 @@ export function loadSlnmixConfig(
         }
       }
       config.extraRoots = parseExtraRoots(parsed["extraRoots"], fileName, diagnostics);
-      // generic で extraRoots が無ければ、git が管理しているファイルを対象にする(設計書 §25.7)
+      // generic で extraRoots が無ければ、git が管理しているファイルを対象にする(設計書 §25.7)。
+      // include / exclude はそのときだけ使う
+      const filters = parseGitFilters(parsed, fileName, diagnostics);
+      if (filters.present) {
+        if (config.kind === "generic" && config.extraRoots.length === 0) {
+          config.include = filters.include;
+          config.exclude = filters.exclude;
+        } else {
+          diagnostics.push({
+            severity: "warning",
+            message:
+              config.kind === "generic"
+                ? `${fileName}: include / exclude は extraRoots が無いとき(git が管理しているファイルを対象にするとき)だけ使います。extraRoots では各要素の include / exclude に書いてください(無視します)`
+                : `${fileName}: include / exclude は kind: "generic" のときだけ使います(無視します)`,
+          });
+        }
+      }
       config.docs = parseDocsConfig(parsed["docs"], fileName, diagnostics);
       const schema = asString(parsed["contractSchema"]);
       if (schema !== undefined && schema.trim() !== "") {

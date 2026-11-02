@@ -218,19 +218,23 @@ git で手動で戻したなど、本当に当て直したいときだけ `--for
 規約から外れてパースで落ちます。`tazuna pack` を使えばその経路を塞げます。
 
 1. `npx tazuna init` (一回だけ。リポジトリ直下で)。`.sln` / `.vbproj` / `.csproj` が無いので、
-   `tazuna.config.json` に `"kind": "generic"` だけを書く
+   git が管理しているファイルの拡張子を見て、`tazuna.config.json` に `"kind": "generic"` と
+   `include` (入れる種類。`**/*.py` など) と `exclude` (`vendor/**`・`*.min.js`・生成コードなど) を書く (0.18.0〜)。
+   見つけた言語・入れないもの (データの `.csv`・鍵の `.pem`・`.npmrc` など)・中身の大きさの目安を表示する
 2. 以降は 0 章と同じ。`npx tazuna pack` が「対象: generic 構成」と表示し、**git が管理しているファイル**
-   (コミット済みのものと、`.gitignore` に一致しない未コミットのもの) でパックと `.prompt.md` を作る。
-   バイナリ・ロックファイル (`package-lock.json` など)・256KB を超えるファイル・`node_modules` / `dist` /
-   `build` / `.env*` は除き、理由をパックの `<skipped_files>` に残す。手順文は VB 固有の項目を外した
-   文面 (先頭行に `layout: generic`) になる
+   (コミット済みのものと、`.gitignore` に一致しない未コミットのもの) のうち `include` に一致するものでパックと
+   `.prompt.md` を作る。バイナリ・ロックファイル (`package-lock.json` など)・256KB を超えるファイル・
+   `node_modules` / `dist` / `build` / `.env*` は除き、理由をパックの `<skipped_files>` に残す。手順文は
+   VB 固有の項目を外した文面 (先頭行に `layout: generic`) になる
 3. docs/ 連携・継続判定・自動テストの節も同じように使える (init が docs/ も作る)
 
-対象を絞りたいときは、`.repomixignore` (書き方は `.gitignore` と同じ) に除外を書くか、
-`tazuna.config.json` の `extraRoots` に `{ "path": "src", "kind": "src" }` のようにディレクトリを書きます
-(`extraRoots` を書くと、git の一覧ではなく書いたディレクトリだけになります。`kind: "src"` の `include` の既定は
-`**/*.{ts,tsx,js,jsx,mjs,cjs,css,scss,json,html,md}` なので、他の言語なら `include` も書いてください)。
-git のリポジトリでないフォルダでは `extraRoots` が必要です (init が `src` / `tests` などの実在するディレクトリを書きます)。
+あとから別の言語のファイルを足したときは、`tazuna.config.json` の `include` に足すまでパックに入りません
+(`npx tazuna pack` が「設定で入れていないファイル: include に一致しない 1 件 (.go 1 件)」のように知らせます)。
+入れたくないものは `exclude` に書きます (`.repomixignore` に書いても同じ)。
+`tazuna.config.json` の `extraRoots` に `{ "path": "src", "kind": "src", "include": ["**/*.py"] }` のように
+ディレクトリを書くと、git の一覧ではなく書いたディレクトリだけになります。
+git のリポジトリでないフォルダでは `extraRoots` が必要です (init が `src` / `tests` などの実在するディレクトリ、
+無ければ言語の分かるソースを含む直下のディレクトリを、中の拡張子から決めた `include` と一緒に書きます)。
 
 認証情報の自動マスクは、TypeScript / JavaScript・Java・C#・Go・Python では文字列とコメントの中だけを伏せ、
 `process.env.API_KEY` のようなコードは伏せません (AI がコードを読めるように)。
@@ -323,8 +327,10 @@ npx ashiato verify checks/x.verify.md  AI が書いた手順どおりに操作�
   `"target": "<パス>/<名前>.sln"` を書いてから `npx tazuna init` を打つ
 - **「… が両方あります」で止まる** → `tazuna.config.json` と `slnmix.config.json` の
   どちらか一方を残す (中身を 1 つにまとめる)
-- **パックに入れたくないファイルが入る (VB.NET 以外)** → `.gitignore` か `.repomixignore` に書く。
-  入ったファイルはパックの `<directory_structure>` で確かめられる
+- **パックに入れたくないファイルが入る (VB.NET 以外)** → `tazuna.config.json` の `exclude` か、`.gitignore` /
+  `.repomixignore` に書く。入ったファイルはパックの `<directory_structure>` で確かめられる
+- **足したファイルがパックに入らない (VB.NET 以外)** → `tazuna.config.json` の `include` に拡張子
+  (`"**/*.go"` など) を足す。`npx tazuna pack` の「設定で入れていないファイル」の行に、入らなかった拡張子が出る
 - **パースが続けて失敗する (TS プロジェクトで repomix を使っている)** →
   規約文が本文に届いていない。`npx tazuna pack` に切り替えて `.prompt.md` を貼る (3-7)。
   当座は `npx tazuna protocol` の出力を本文に貼れば規約文だけは届く

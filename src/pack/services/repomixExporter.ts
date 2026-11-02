@@ -46,6 +46,7 @@ import {
   collectGitFiles,
   GIT_FILE_MAX_BYTES,
   GIT_FILES_KIND,
+  type GitFilesFiltered,
   type ExtraRootFile,
   type ExtraRootsResult,
 } from "./extraRootsCollector.ts";
@@ -110,6 +111,10 @@ export interface RepomixExportOptions {
   gitFiles?: readonly string[] | undefined;
   /** gitFiles のうちパックの別の場所(<docs> / <db_schema>)に入るファイルなら、その説明 */
   gitFilesShownElsewhere?: ((relativePath: string) => string | undefined) | undefined;
+  /** gitFiles を絞る設定の include(ルート相対のグロブ。無ければすべて) */
+  gitInclude?: readonly string[] | undefined;
+  /** gitFiles から外す設定の exclude(ルート相対のグロブ) */
+  gitExclude?: readonly string[] | undefined;
   /** 設定ファイルの名前(ヘッダーの説明用。既定は新しい名前。旧名の slnmix.config.json のときはそれ) */
   configFileName?: string | undefined;
   /** contract.schema.json のルート相対パス(rootDir 必須)。あれば <contract_summary> を生成 */
@@ -153,6 +158,8 @@ export interface RepomixExportResult {
   extraRootFileCount: number;
   /** <contract_summary> を生成したか */
   contractSummaryIncluded: boolean;
+  /** git が管理しているファイルを設定の include / exclude で絞ったときの件数(絞らなければ undefined) */
+  gitFilesFiltered?: GitFilesFiltered | undefined;
   /** extraRoots の走査など、出力生成中の診断(呼び出し側が表示する) */
   diagnostics: ParseDiagnostic[];
   /** 出力した <file> の path 属性(出力順。自動テストの有無の判定に使う) */
@@ -441,6 +448,20 @@ function describePath(
   };
 }
 
+/** 「.csv 2 件 / .ipynb 1 件」(先頭 5 種類 + 残りの種類の数) */
+function formatLabelCounts(entries: ReadonlyArray<{ label: string; count: number }>): string {
+  const shown = entries.slice(0, 5).map((entry) => `${entry.label} ${entry.count} 件`);
+  const rest = entries.length - shown.length;
+  return [...shown, ...(rest > 0 ? [`ほか ${rest} 種類`] : [])].join(" / ");
+}
+
+/** グロブの一覧(先頭 5 件 + 残りの数) */
+function formatPatterns(patterns: readonly string[]): string {
+  const shown = patterns.slice(0, 5);
+  const rest = patterns.length - shown.length;
+  return [...shown, ...(rest > 0 ? [`ほか ${rest} 件`] : [])].join(" / ");
+}
+
 /** relativePosix が generatedDirs のいずれかの配下なら、そのディレクトリを返す */
 function generatedDirOf(
   relativePosix: string | undefined,
@@ -666,11 +687,16 @@ export function buildRepomixOutput(
         message: "git が管理しているファイルは物理パス化(rootDir)とファイルサイズの取得が有効なときだけ扱えます",
       });
     } else {
-      extra = collectGitFiles(rootDir, gitFiles, {
-        fileSize: deps.fileSize,
-        ignoreReasonFor: deps.ignoreReasonFor,
-        shownElsewhere: options.gitFilesShownElsewhere,
-      });
+      extra = collectGitFiles(
+        rootDir,
+        gitFiles,
+        {
+          fileSize: deps.fileSize,
+          ignoreReasonFor: deps.ignoreReasonFor,
+          shownElsewhere: options.gitFilesShownElsewhere,
+        },
+        { include: options.gitInclude, exclude: options.gitExclude },
+      );
       diagnostics.push(...extra.diagnostics);
       skipped.push(...extra.skipped.map((s) => ({ path: s.relativePath, reason: s.reason })));
     }
@@ -894,9 +920,27 @@ export function buildRepomixOutput(
         ]
       : []),
     ...(extra !== undefined && gitFiles !== undefined
-      ? [
-          `- 対象は git が管理しているファイル(追跡中のものと、.gitignore に一致しない未追跡のもの)。バイナリ・ロックファイル・${GIT_FILE_MAX_BYTES / 1024}KB を超えるもの・node_modules / dist / build / .env などは除外(<skipped_files> に理由)。対象を絞るときは .repomixignore に書く`,
-        ]
+      ? extra.filtered === undefined
+        ? [
+            `- 対象は git が管理しているファイル(追跡中のものと、.gitignore に一致しない未追跡のもの)。バイナリ・ロックファイル・${GIT_FILE_MAX_BYTES / 1024}KB を超えるもの・node_modules / dist / build / .env などは除外(<skipped_files> に理由)。対象を絞るときは .repomixignore に書く`,
+          ]
+        : [
+            `- 対象は git が管理しているファイル(追跡中のものと、.gitignore に一致しない未追跡のもの)のうち、${configFileName} の include に一致し exclude に一致しないもの。バイナリ・ロックファイル・${GIT_FILE_MAX_BYTES / 1024}KB を超えるもの・node_modules / dist / build / .env なども除外(<skipped_files> に理由)`,
+            ...(extra.filtered.notIncluded > 0 || extra.filtered.excluded > 0
+              ? [
+                  `- 設定で入れていないファイル: ${[
+                    ...(extra.filtered.notIncluded > 0
+                      ? [
+                          `include に一致しない ${extra.filtered.notIncluded} 件(${formatLabelCounts(extra.filtered.notIncludedByLabel)})`,
+                        ]
+                      : []),
+                    ...(extra.filtered.excluded > 0
+                      ? [`exclude(${formatPatterns(options.gitExclude ?? [])})に一致する ${extra.filtered.excluded} 件`]
+                      : []),
+                  ].join("、")}。中身が必要なら、推測せずに共有を依頼すること`,
+                ]
+              : []),
+          ]
       : []),
     ...(extra !== undefined && gitFiles === undefined
       ? [
@@ -946,8 +990,11 @@ export function buildRepomixOutput(
     uiSummaryCount,
     extraRootFileCount,
     contractSummaryIncluded: contractPlaced,
+    gitFilesFiltered: gitFiles !== undefined ? extra?.filtered : undefined,
     diagnostics,
     filePaths,
     environmentBlock,
   };
 }
+
+export { formatLabelCounts };
