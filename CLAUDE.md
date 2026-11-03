@@ -439,6 +439,21 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   伏せ方は path なし (読む。コードの部分は後で戻る)。テストは tests/mask-formats.test.ts (漏れていた形・伏せすぎない形・
   適用側の往復)。伏せ方を変えたら公開リポジトリで伏せ字の増減を比べる (/mnt/project-files/plans/mask-gaps/ の
   スクリプト。2026-11-02 は 12 リポジトリ 3,242 ファイルで +41、伏せすぎ 3 種を直した)
+- コードの形の追加 (v0.20.0、2026-11-03。設計書 §17 の 2026-11-03): VB は maskVbSource が代入・比較・秘密の名前の関数の引数を
+  読むが、ほかの言語は「名前 = 値」の規則だけで、`ds.setPassword("...")`・`process.env.X || "..."`・C# の
+  `new NetworkCredential("u", "...")` が漏れていた。maskGenericText の maskCodeShapes に汎用テキストの規則として足す (言語の
+  分かるソースは maskLanguageSource が文字列の中の部分だけを残す): SECRET_SETTER (set / with + 秘密系の名前か、名前そのものが
+  秘密系の語。引数が文字列 1 つだけ。validatePassword / getPassword / t.pass は除く)・DEFAULT_LITERAL (`||` / `??` / ` ?:` /
+  `or` の後の文字列。operandStart で演算子の前の値を後ろから読み、最後の名前・括弧の中のキーの形の文字列・代入の先
+  (DEFAULT_TARGET) のどれかが isSecretPair なら)・COMPARE_LITERAL / EQUALS_LITERAL (`.Text` / `.value` を除いた名前)・
+  POSITIONAL_SECRET_CALLS (定番の関数のパスワードの位置。引数の数で位置を決める。callArguments は文字列と括弧を数える)・
+  COMMAND_CALL_LITERAL (Gradle の `password '...'`)・NAMED_VALUE_TAG (`<param|property|entry name|key value>`)・
+  DEFAULT_SETTING_LITERAL (C# の Settings.Designer.cs)。KEY_VALUE に差し込みの無いテンプレート文字列を足した (接頭辞は
+  LITERAL_PREFIX)。VB は vbCallPositionKind (`If(式, "既定値")` と `.Authenticate("u", "...")`)。コマンドは CLI_ARGS に curl
+  (`-u ユーザー:パスワード`)・Invoke-Sqlcmd (`-Password`)・sqlcmd の `/P`、CLI_COMMAND に `net.exe use`、maskSecureStrings
+  (ConvertTo-SecureString -AsPlainText)。見本 95 通りの漏れは 17 → 7 (残りは C / Rust / Makefile / R / YAML のフロー形式 /
+  secret_key_base で、見かけることが少ないため後回し)。伏せすぎは 17 リポジトリ 11,308 ファイルで +39 / -0 (どれもサンプル・
+  テストのパスワードとトークン)。最悪の入力 (全行が当たる 6MB) でも 2 秒以内
 
 ### slnmix 設計書 §11 の実装 (2026-09-12, v0.9.0)
 
@@ -553,7 +568,10 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   v0.18.0: 2026-11-02 init が実際にあるファイルの拡張子を見て generic 構成の `include` / `exclude` を書く
   (vendor・圧縮済み・生成コード・鍵・データを入れない) + git の外の Python などの extraRoots。2026-11-02 公開 /
   v0.19.0: 2026-11-02 人が決めた短いパスワードの伏せ方 (YAML の `キー: 値`・Oracle のログオン・SQL の IDENTIFIED BY・
-  PHP / Ruby の `=>` など)。**未公開** (公開は利用者)。
+  PHP / Ruby の `=>` など)。2026-11-02 公開 /
+  v0.20.0: 2026-11-03 VB 以外のコードの形 (setter・既定値・比較・定番の関数の位置の引数) とコマンド (curl・
+  ConvertTo-SecureString・Invoke-Sqlcmd・sqlcmd /P・net.exe use)・Gradle・<param>・Settings.Designer.cs の伏せ方。
+  **未公開** (公開は利用者)。
   リポジトリ: https://github.com/ishibashi0112/tazuna (旧 https://github.com/ishibashi0112/petari。GitHub が転送する)
   リリース手順: version を上げて `pnpm publish` (`prepublishOnly` が typecheck → test → build を実行。認証はユーザー)
 - **publish 事故と再発防止 (2026-09-14)**: v0.9.0 は `package.json` の version だけ 0.9.0 で、
