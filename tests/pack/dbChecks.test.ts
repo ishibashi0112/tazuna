@@ -31,6 +31,8 @@ suite("dbChecks", () => {
   test("データの姿つき(ashiato schema --data の出力)を見分ける(日本語・英語)", () => {
     assert.strictEqual(schemaHasData(DATA_JA), true);
     assert.strictEqual(schemaHasData(DATA_EN), true);
+    // Windows で書いたもの (CRLF・BOM)
+    assert.strictEqual(schemaHasData(`\uFEFF${DATA_JA.replace(/\n/g, "\r\n")}`), true);
     assert.strictEqual(schemaHasData("# DB のテーブル定義\n\n列・型・主キー・コメントです。\n"), false);
     // 行の途中に現れる語では見分けない(コメントに --data と書いた列など)
     assert.strictEqual(schemaHasData("| note | text | YES | `--data` で渡す |\n"), false);
