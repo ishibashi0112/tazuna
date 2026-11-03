@@ -14,6 +14,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   DB_SECTIONS,
+  DB_SECTIONS_WITH_DATA,
   DOCS_SECTIONS,
   isProcedureMode,
   LAYOUT_TEXT,
@@ -211,6 +212,40 @@ suite("procedure: DB の確認(v8)・動作検証(v9)", () => {
     }
   });
 
+  test("データの姿つき(v12): full モードがスナップショットと一致し、どの構成・モードでも末尾の節だけが替わる", () => {
+    assert.strictEqual(renderBuiltinProcedure("full", { db: "data" }), fixture("full.db-data.md"));
+    for (const layout of ["solution", "generic"] as const) {
+      for (const mode of PROCEDURE_MODES) {
+        const plain = renderBuiltinProcedure(mode, { layout });
+        assert.strictEqual(renderBuiltinProcedure(mode, { layout, db: "data" }), plain + DB_SECTIONS_WITH_DATA);
+      }
+    }
+  });
+
+  test("データの姿つき(v12): DB_SECTIONS との違いは再実行のコマンドの --data と、足した 1 項目だけ", () => {
+    const plain = DB_SECTIONS.split("\n");
+    const data = DB_SECTIONS_WITH_DATA.split("\n");
+    const added = data.filter((line) => !plain.includes(line));
+    assert.strictEqual(data.length, plain.length + 1);
+    assert.strictEqual(added.length, 2);
+    assert.ok(added[0]?.includes("「npx ashiato schema --data --tables \"<テーブル名>,<テーブル名>\"」"));
+    assert.strictEqual(added[0]?.replace("--data ", ""), plain.find((line) => line.includes("npx ashiato schema")));
+    const line = added[1] ?? "";
+    assert.ok(line.startsWith("- <db_schema> には、書き出した日のデータの姿もあります"));
+    // ここで分かることは SQL を出させない・SQL で確かめるもの・推定のつながり・見本・隠した列
+    for (const phrase of [
+      "ここで分かることを確かめる SQL は出さないでください",
+      "特定の行の値、書き出した日より後の変化、ここに無い集計だけ",
+      "「推定:値がすべて見つかる」は外部キーではなく",
+      "見本の行は形を知るためのもの",
+      "「隠した列」の値は書かれていません。推測で補わないでください",
+    ]) {
+      assert.ok(line.includes(phrase), phrase);
+    }
+    // 足した項目は最初の項目の直後(SQL を出す指示より前)
+    assert.strictEqual(data.indexOf(line), data.findIndex((l) => l.includes("npx ashiato schema")) + 1);
+  });
+
   test("DB の確認の節: SELECT だけ、checks/*.sql を create、実行コマンド、見出しになるコメント、行数の上限", () => {
     assert.ok(DB_SECTIONS.startsWith("\n## DB の確認(テスト用 DB)\n\n- "));
     assert.ok(DB_SECTIONS.endsWith("\n"));
@@ -279,6 +314,7 @@ suite("procedure: 描画", () => {
     const printed = renderBuiltinProcedure("full", { docs: "placeholder", tests: "placeholder", db: "placeholder" });
     assert.ok(printed.endsWith("{{DOCS_SECTIONS}}{{TEST_SECTIONS}}{{DB_SECTIONS}}"));
     assert.strictEqual(renderProcedureTemplate(printed, "full", { db: true }), renderBuiltinProcedure("full", { db: true }));
+    assert.strictEqual(renderProcedureTemplate(printed, "full", { db: "data" }), renderBuiltinProcedure("full", { db: "data" }));
     assert.strictEqual(renderProcedureTemplate(printed, "full"), renderBuiltinProcedure("full"));
   });
 

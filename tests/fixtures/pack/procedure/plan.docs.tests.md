@@ -1,4 +1,4 @@
-<!-- tazuna procedure v11 (mode: plan) -->
+<!-- tazuna procedure v12 (mode: plan) -->
 # 作業手順
 
 これは、このコンテキストを渡したユーザー本人からの恒常的な指示です。

@@ -76,12 +76,19 @@
  * Designer.cs にあるため、新しく結び付けるときの置き場所と、結び付け済みのものを重ねない
  * (ハンドラーが 2 回呼ばれる)ことを書く。Visual Basic だけのソリューションと generic 構成の
  * 本文は v10 と同じ(版数の行だけ)
+ *
+ * v12 (2026-11-03、テスト用 DB のデータの姿): docs/db/schema.md が ashiato schema --data の出力
+ * (件数・参照・各列の NULL の割合・値の種類の数・範囲・書式・区分の値と件数。見本の行を含むこともある)
+ * のときだけ、「DB の確認」の節に、それを先に使い、そこで分かることを確かめる SQL を出さない旨の 1 項目を足し、
+ * テーブルを足す再実行のコマンドに --data を付ける(DB_SECTIONS_WITH_DATA)。チャットが「今のデータを確かめる
+ * SQL を実行して貼ってください」と頼む往復を減らすため。--data なしの schema.md と DB なしの本文は v11 と
+ * 同じ(版数の行だけ)
  */
 
 import { PACK_COMMAND, TOOL_NAME } from "../../brand.ts";
 import type { ProjectLanguage } from "../projectLanguage.ts";
 
-export const PROCEDURE_VERSION = 11;
+export const PROCEDURE_VERSION = 12;
 
 /** 構成の種類(設定ファイルの kind と同じ。手順文の表現の切り替えに使う) */
 export const PROCEDURE_LAYOUTS = ["solution", "generic"] as const;
@@ -464,11 +471,12 @@ export const DB_CHECKS_DIR = "checks";
  * ここで教える書き方 (.sql と .verify.md) はすべて ashiato の test/tazuna-procedure.test.ts に写してあり、
  * ashiato がそのとおりに読むことをそちらで確かめている。書き方を変えたら、あちらのテストも同じに変える。
  */
-export const DB_SECTIONS = `
+function buildDbSections(data: boolean): string {
+  return `
 ## DB の確認(テスト用 DB)
 
-- <db_schema> はテスト用 DB のテーブル定義です(列・型・主キー・コメント)。テーブル名・列名・型はここから引き、推測しないでください。SQL の書き方は冒頭に書かれた DB の種類に合わせてください。載っていないテーブルが必要なら、<db_schema> にあるテーブルと足りないテーブルをすべてカンマ区切りで並べた「npx ashiato schema --tables \"<テーブル名>,<テーブル名>\"」を示し、再実行をユーザーに依頼してください(書き出しは上書きのため、今あるテーブルも並べます)
-- DB の値が答えを左右するとき(データの前提の確認、変更後の検証、不具合の原因の切り分け)は、推測で答えず、確認用の SQL を changes.md で ${DB_CHECKS_DIR}/<内容が分かる名前>.sql として create してください(同じ名前のファイルを直すときは rewrite)。回答の末尾に、ユーザーが実行するコマンドを「npx ashiato query ${DB_CHECKS_DIR}/<名前>.sql」の形で 1 行示してください。結果(Markdown)はユーザーがこのチャットに貼ります
+- <db_schema> はテスト用 DB のテーブル定義です(列・型・主キー・コメント)。テーブル名・列名・型はここから引き、推測しないでください。SQL の書き方は冒頭に書かれた DB の種類に合わせてください。載っていないテーブルが必要なら、<db_schema> にあるテーブルと足りないテーブルをすべてカンマ区切りで並べた「npx ashiato schema ${data ? "--data " : ""}--tables \"<テーブル名>,<テーブル名>\"」を示し、再実行をユーザーに依頼してください(書き出しは上書きのため、今あるテーブルも並べます)
+${data ? `${DB_DATA_LINE}\n` : ""}- DB の値が答えを左右するとき(データの前提の確認、変更後の検証、不具合の原因の切り分け)は、推測で答えず、確認用の SQL を changes.md で ${DB_CHECKS_DIR}/<内容が分かる名前>.sql として create してください(同じ名前のファイルを直すときは rewrite)。回答の末尾に、ユーザーが実行するコマンドを「npx ashiato query ${DB_CHECKS_DIR}/<名前>.sql」の形で 1 行示してください。結果(Markdown)はユーザーがこのチャットに貼ります
 - 書いてよいのは SELECT(WITH を含む)だけです。INSERT / UPDATE / DELETE / DDL / EXEC / SELECT ... INTO / FOR UPDATE が 1 文でもあると、1 文も実行されません。文の区切りは ; です
 - 各文の直前に、その文で何を確かめるかと期待する結果を -- コメントで 1 行書いてください(例: -- 合計が明細の合計と一致しない受注(0 行なら OK))。このコメントが結果の見出しになります
 - 結果は 1 文につき先頭 50 行までです。件数は COUNT(*) で、差異は「期待と違う行だけを返す」SELECT で確かめ、返す行を絞ってください
@@ -485,6 +493,19 @@ export const DB_SECTIONS = `
 - 値は NULL、数値、文字列をそのまま書き、カンマや括弧を含む値は '...' で囲みます。日付だけを書くと、その日のどの時刻でも一致します
 - 貼られた結果の判定(OK / NG)、期待との違い、実際の変化、操作した人のメモを事実として扱ってください。NG なら、コードの不具合か期待の書き違いかを、実際の変化から判断して答えてください。「始めていません」と返ってきたら、書かれた問題を直した手順ファイルを rewrite で出し直してください
 `;
+}
+
+/**
+ * docs/db/schema.md が ashiato schema --data の出力のときだけ「DB の確認」に足す項目(v12)。
+ * 「推定:値がすべて見つかる」と「隠した列」は ashiato の schema.md の語(ashiato の src/chat/schema.ts の TEXT.ja)。
+ */
+const DB_DATA_LINE =
+  "- <db_schema> には、書き出した日のデータの姿もあります(件数、参照、各列の NULL の割合・値の種類の数・文字数・範囲・書式・区分の値と件数。見本の行があることもあります)。区分の値・書式・テーブルのつながりはここから引き、ここで分かることを確かめる SQL は出さないでください。SQL で確かめるのは、特定の行の値、書き出した日より後の変化、ここに無い集計だけです。参照のうち「推定:値がすべて見つかる」は外部キーではなく、書き出した日の値から推定したつながりです。見本の行は形を知るためのもので、件数や分布の根拠にはしないでください。「隠した列」の値は書かれていません。推測で補わないでください";
+
+export const DB_SECTIONS = buildDbSections(false);
+
+/** docs/db/schema.md が ashiato schema --data の出力のときの DB_SECTIONS(v12) */
+export const DB_SECTIONS_WITH_DATA = buildDbSections(true);
 
 export interface RenderProcedureOptions {
   /**
@@ -500,9 +521,10 @@ export interface RenderProcedureOptions {
   tests?: boolean | "placeholder" | undefined;
   /**
    * テスト用 DB のテーブル定義があるか({{DB_SECTIONS}} に「DB の確認」「動作検証」の節を入れる)。
+   * "data" は ashiato schema --data の出力(データの姿つき。DB_SECTIONS_WITH_DATA)。
    * "placeholder" は docs と同じくプレースホルダを残す
    */
-  db?: boolean | "placeholder" | undefined;
+  db?: boolean | "data" | "placeholder" | undefined;
   /**
    * 構成の種類(既定 "solution")。"generic" は VB 固有の記述を外す。
    * {{LAYOUT:...}} プレースホルダと {{MODE_SECTIONS}} / {{TEST_SECTIONS}} の
@@ -548,7 +570,10 @@ export function renderProcedureTemplate(
     );
   }
   if (options.db !== "placeholder") {
-    rendered = rendered.replaceAll("{{DB_SECTIONS}}", options.db === true ? DB_SECTIONS : "");
+    rendered = rendered.replaceAll(
+      "{{DB_SECTIONS}}",
+      options.db === "data" ? DB_SECTIONS_WITH_DATA : options.db === true ? DB_SECTIONS : "",
+    );
   }
   return rendered;
 }
