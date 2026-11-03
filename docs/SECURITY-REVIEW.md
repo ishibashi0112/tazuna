@@ -228,7 +228,10 @@ AI の回答に `[MASKED]` が残っていても、tazuna は伏せた後の内�
 
 tazuna は DB に接続しません。テスト用 DB の値を AI に確かめさせる運用
 (運用ガイド 3-8・3-9)では、別ツールの ashiato(<https://github.com/ishibashi0112/ashiato>)が
-次を行います。導入する場合は ashiato も審査の対象にしてください。
+次を行います。導入する場合は ashiato も審査の対象にしてください。ashiato の審査向けの説明(コマンドごとの DB・
+ポートの待ち受け・ブラウザ・書き込むファイル、依存と同梱物)は ashiato の
+[docs/security-review.ja.md](https://github.com/ishibashi0112/ashiato/blob/main/docs/security-review.ja.md) にあります。
+この運用で使う次の 3 つのコマンドは、ポートを開かず、ブラウザも起動しません。
 
 - `ashiato schema`: DB のカタログからテーブル定義を読み、`docs/db/schema.md` に書く(行の値は読まない)
 - `ashiato query`: AI が書いた `.sql` を実行し、結果を Markdown でクリップボードに入れる。
@@ -241,6 +244,8 @@ tazuna は DB に接続しません。テスト用 DB の値を AI に確かめ�
   ことはない(書かれているのは期待する変化で、SQL ではない)。`--save-session` を付けたときだけ、
   変化を `.ashiato/sessions/` に保存する
 - 接続には SELECT だけを許可したユーザーを使う(ツール側の検査は一次の防御で、最後の防御ではない)
+- DB への接続には、使う DB のドライバー(SQL Server は mssql、Oracle は oracledb)を ashiato と一緒に入れる。
+  これらは tazuna の「実行時依存ゼロ」(§8)の外にあり、ashiato の審査で扱う
 - 結果には DB の値が入る。チャットに貼ると送信されるため、本番ではなくテスト用 DB に限り、
   値を貼ってよいかを社内の決まりで決める
 

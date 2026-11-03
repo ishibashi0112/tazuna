@@ -461,6 +461,8 @@ export const DB_CHECKS_DIR = "checks";
  * 「動作検証」(v9): 操作の手順と期待する DB の変化を checks/*.verify.md で出させる。
  * ユーザーが ashiato verify で手順どおりに操作し、照合の結果(OK / NG・違い・変わった行)
  * の Markdown がチャットに貼られる。書式は ashiato の verifyFile.ts が読める形に合わせる。
+ * ここで教える書き方 (.sql と .verify.md) はすべて ashiato の test/tazuna-procedure.test.ts に写してあり、
+ * ashiato がそのとおりに読むことをそちらで確かめている。書き方を変えたら、あちらのテストも同じに変える。
  */
 export const DB_SECTIONS = `
 ## DB の確認(テスト用 DB)
