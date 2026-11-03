@@ -545,4 +545,20 @@ suite("procedureFile: DB の確認(手順文 v8)", () => {
     const resolved = resolveProcedure({ disabled: false, mode: "full", db: true }, PROJECT_DIR, CWD, fakeDeps({}));
     assert.ok(resolved.kind === "builtin" && resolved.content === renderBuiltinProcedure("full", { db: true }));
   });
+
+  test("データの姿つき(v12): 本文用テキストの 1 行と、内蔵文の「DB の確認」の節がそれに合う", () => {
+    const text = buildPromptText(
+      tail({ dbSchema: { ...SCHEMA, hasData: true }, procedure: { kind: "builtin", mode: "full", content: "手順\n" } }),
+      "p.xml",
+    );
+    assert.ok(text?.includes("添付の <db_schema> にはテスト用 DB のテーブル定義とデータの姿(docs/db/schema.md)があります。"));
+    assert.ok(
+      assembleOutput("本文\n", tail({ dbSchema: { ...SCHEMA, hasData: true } })).includes(
+        "<db_schema>(テスト用 DB のテーブル定義とデータの姿)",
+      ),
+    );
+    const resolved = resolveProcedure({ disabled: false, mode: "full", db: "data" }, PROJECT_DIR, CWD, fakeDeps({}));
+    assert.ok(resolved.kind === "builtin" && resolved.content === renderBuiltinProcedure("full", { db: "data" }));
+    assert.ok(resolved.kind === "builtin" && resolved.content.includes("npx ashiato schema --data --tables"));
+  });
 });

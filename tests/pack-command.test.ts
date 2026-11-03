@@ -149,6 +149,39 @@ describe("tazuna pack: generic 構成で extraRoots が無ければ git が管�
     expect(result.stdout).toContain('<file path="docs/notes.md">');
   });
 
+  it.skipIf(!hasGit)("データの姿つきの schema.md (ashiato schema --data。CRLF・未コミット・.gitignore に書いても) は手順文 v12 の節にする", () => {
+    const dir = gitRepo();
+    mkdirSync(join(dir, "docs", "db"), { recursive: true });
+    writeFileSync(join(dir, ".gitignore"), "docs/db/\n");
+    const schema = [
+      "# DB のテーブル定義",
+      "",
+      "SQL Server のカタログから `ashiato schema` が書き出しました(参照のみ)。",
+      "",
+      "`--data` で 2026-11-03 時点のデータの姿も書き足しています。",
+      "",
+      "## テーブル",
+      "",
+      "### dbo.T_ORDER",
+      "",
+      "件数:3 行",
+      "",
+      "| 列 | 型 | Null | データ |",
+      "| --- | --- | --- | --- |",
+      "| STATUS | char(2) | NOT NULL | 10 (2), 90 (1) |",
+      "",
+    ].join("\r\n");
+    writeFileSync(join(dir, "docs", "db", "schema.md"), schema);
+    const result = run(["--stdout", "--no-clip"], dir);
+    expect(result.code).toBe(0);
+    expect(result.stderr).toContain("DB の確認・動作検証: あり(docs/db/schema.md、");
+    expect(result.stderr).toContain("文字、データの姿つき)");
+    expect(result.stdout).toContain("テスト用 DB のテーブル定義と、書き出した日のデータの姿(ashiato schema --data の出力。");
+    expect(result.stdout).toContain("| STATUS | char(2) | NOT NULL | 10 (2), 90 (1) |");
+    expect(result.stdout).toContain("- <db_schema> には、書き出した日のデータの姿もあります");
+    expect(result.stdout).toContain("npx ashiato schema --data --tables");
+  });
+
   it.skipIf(!hasGit)("前回のパック (.gitignore に書いていない repomix-output.*) を入れない", () => {
     const dir = gitRepo();
     const first = run(["--no-clip"], dir);

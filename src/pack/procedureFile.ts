@@ -141,8 +141,11 @@ export interface ProcedureOptions {
   docs?: boolean | undefined;
   /** 自動テストがあるか(手順文に「自動テスト」の節を入れる。autoTests.ts の判定) */
   tests?: boolean | undefined;
-  /** テスト用 DB のテーブル定義があるか(手順文に「DB の確認」の節を入れる。dbChecks.ts) */
-  db?: boolean | undefined;
+  /**
+   * テスト用 DB のテーブル定義があるか(手順文に「DB の確認」の節を入れる。dbChecks.ts)。
+   * "data" はデータの姿つき(ashiato schema --data の出力)
+   */
+  db?: boolean | "data" | undefined;
   /** 構成の種類(設定ファイルの kind。省略時 "solution") */
   layout?: ProcedureLayout | undefined;
   /** solution 構成のプロジェクトの言語(C# があれば C# の語句にする。省略時は Visual Basic) */
@@ -166,7 +169,7 @@ export function resolveProcedure(
   const render = {
     docs: options.docs === true,
     tests: options.tests === true,
-    db: options.db === true,
+    db: options.db === "data" ? ("data" as const) : options.db === true,
     layout: options.layout ?? DEFAULT_PROCEDURE_LAYOUT,
     languages: options.languages,
   };
@@ -264,7 +267,7 @@ export function buildNotice(tail: OutputTail): string | undefined {
     blocks.push("<docs>(プロジェクト文書: 設計書 / 仕様書 / 引継ぎ書)");
   }
   if (hasDbSchema) {
-    blocks.push("<db_schema>(テスト用 DB のテーブル定義)");
+    blocks.push(`<db_schema>(テスト用 DB のテーブル定義${tail.dbSchema?.hasData === true ? "とデータの姿" : ""})`);
   }
   if (hasTask) {
     blocks.push("<task>(依頼内容)");
@@ -398,7 +401,7 @@ export function buildPromptText(
   }
   if (tail.dbSchema !== undefined) {
     header.push(
-      `添付の <db_schema> にはテスト用 DB のテーブル定義(${tail.dbSchema.relativePath})があります。`,
+      `添付の <db_schema> にはテスト用 DB のテーブル定義${tail.dbSchema.hasData === true ? "とデータの姿" : ""}(${tail.dbSchema.relativePath})があります。`,
     );
   }
   header.push(

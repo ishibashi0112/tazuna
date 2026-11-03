@@ -252,8 +252,13 @@ DB に接続するのは ashiato だけで、実行するのは SELECT だけで
    (ashiato の docs/trial-guide.ja.md の 2-2)
 1. 一回だけ: `npx ashiato schema --tables "<使うテーブル>"` でテーブル定義を
    `docs/db/schema.md` に書き出す (接続先は `--db` か環境変数 `ASHIATO_DB_URL`)。
-   テーブルが変わったら打ち直す
-2. 以降の `npx tazuna pack` が「DB の確認・動作検証: あり」と表示し、パックにテーブル定義を、
+   テーブルが変わったら打ち直す。
+   `--data` を付けると (ashiato 0.3.0〜)、件数・参照・区分の値・書式・範囲などの「データの姿」も
+   書き足し、AI はそれを先に使って、同じことを確かめる SQL を出さなくなる (手順文 v12)。
+   区分の値や範囲などの値が入り、コミットしていなくても次の `npx tazuna pack` からチャットに渡るので、
+   書き出したらすぐ schema.md を読む。
+   名前から分からない個人の情報の列は `docs/db/data-rules.json` の `hide` に足して打ち直す
+2. 以降の `npx tazuna pack` が「DB の確認・動作検証: あり」(`--data` なら「データの姿つき」も) と表示し、パックにテーブル定義を、
    手順文に「DB の確認」「動作検証」の節を入れる
 3. AI は値の確認が要るとき、`checks/<名前>.sql` を changes.md で出し、回答の末尾に
    `npx ashiato query checks/<名前>.sql` を書く。tazuna で当ててからそのコマンドを打つと、
@@ -302,6 +307,7 @@ npx tazuna show                    直前の適用の差分を表示
 npx tazuna protocol                内蔵の規約文を表示する (protocol.md で上書きしたいときの元に)
 
 npx ashiato schema --tables "A,B"   テスト用 DB のテーブル定義を docs/db/schema.md に書き出す (3-8)
+npx ashiato schema --data --tables "A,B"  テーブル定義にデータの姿 (件数・区分の値・範囲など) も足す (3-8)
 npx ashiato query checks/x.sql     AI が書いた SELECT を実行し、結果をコピー (3-8)
 npx ashiato verify checks/x.verify.md  AI が書いた手順どおりに操作し、DB の変化の照合結果をコピー (3-9)
 ```

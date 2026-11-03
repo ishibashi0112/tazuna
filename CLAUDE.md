@@ -138,7 +138,8 @@ slnmix 0.22.2 の `src/` を `src/pack/`、テストを `tests/pack/`、test-fix
   パック全体、超えるなら本文用テキストをクリップボードへ。§21) / `buildErrors.ts` + `msbuildRunner.ts`
   (`tazuna build`。エラーの抜粋・本文・ログの末尾をパックと同じ規則で伏せる。MSBuild の場所は --msbuild > vswhere >
   MSBuild 14.0 / 12.0 > .NET Framework 4。起動自体は自動テストなし。§22) / `dbChecks.ts` (`docs/db/schema.md` が
-  あるときだけ `<db_schema>` と手順文の `{{DB_SECTIONS}}`。§23・§24) / `initConfig.ts` (`--init-config`) /
+  あるときだけ `<db_schema>` と手順文の `{{DB_SECTIONS}}`。§23・§24。`ashiato schema --data` の出力 (説明の行で見分ける
+  `schemaHasData`) なら手順文 v12 の `DB_SECTIONS_WITH_DATA`。見分ける行の文面は ashiato の schema.ts の dataIntro) / `initConfig.ts` (`--init-config`) /
   `designerFileFilter.ts` / `procedureFile.ts` + `assets/procedure.ts` (手順文。内蔵文を変えたら `PROCEDURE_VERSION`
   を上げ `tests/fixtures/pack/procedure/` のスナップショットを更新する。v7 の layout、v6 の `{{TEST_SECTIONS}}`
   (`autoTests.ts`) は無いときの本文を前の版と同一に保つ) / `docs.ts` + `initDocs.ts` + `assets/docTemplates.ts`

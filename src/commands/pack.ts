@@ -541,7 +541,8 @@ export function packCommand(argv: string[]): number {
   err(`自動テスト: ${describeAutoTests(autoTests)}`);
 
   // DB の確認・動作検証(手順文 v8 / v9): ルートの docs/db/schema.md(ashiato schema の出力)が
-  // あればパックに <db_schema> を入れ、手順文に「DB の確認」「動作検証」の節を足す。無ければ従来と同一
+  // あればパックに <db_schema> を入れ、手順文に「DB の確認」「動作検証」の節を足す。無ければ従来と同一。
+  // ashiato schema --data の出力(データの姿つき)なら「DB の確認」をそれに合わせる(v12)
   err(`DB の確認・動作検証: ${describeDbSchema(dbSchema)}`);
 
   // 規約文を出力末尾へ連結する(内蔵。ルートの protocol.md は置いたときだけ使う上書き)
@@ -579,7 +580,7 @@ export function packCommand(argv: string[]): number {
       mode,
       docs: docs !== undefined,
       tests: autoTests.present,
-      db: dbSchema !== undefined,
+      db: dbSchema === undefined ? false : dbSchema.hasData === true ? "data" : true,
       layout,
       languages: sources.map((source) => source.parseResult.language),
     },
