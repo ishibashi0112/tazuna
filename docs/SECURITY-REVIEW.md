@@ -4,7 +4,7 @@
 コマンドラインツール tazuna の導入審査用の資料です。
 どのデータがどこへ出るか、ツールが何をして何をしないかを、コードで確かめられる形でまとめます。
 
-- 対象: tazuna 0.19.0(2026-11-02 時点)
+- 対象: tazuna 0.20.0(2026-11-03 時点)
 - ソース: <https://github.com/ishibashi0112/tazuna>
 - ライセンス: MIT
 - 以前の slnmix(パックを作る側)と petari(変更を当てる側)は、0.15.0 で 1 つのパッケージにまとめ、tazuna に
@@ -122,6 +122,24 @@ docker compose の `- POSTGRES_PASSWORD=...`(引用符で囲んだものも)・`
 (`$config['db']['password'] = '...'` / `os.environ["DB_PASSWORD"] = "..."`)・秘密の名前を最初の引数に渡す関数の値
 (`define('DB_PASSWORD', '...')`・`env('DB_PASSWORD', '既定値')`・`os.environ.get("DB_PASSWORD", "既定値")`・
 `System.getProperty("db.password", "既定値")`)。
+0.20.0 から、VB で以前から読んでいたコードの形を、ほかの言語でも読みます。秘密の名前のメソッドに文字列を 1 つだけ渡す
+setter・builder(`ds.setPassword("...")` / `.password("...")` / `SetPassword("...")` / `withPassword("...")` /
+`user.set_password("...")`。`validatePassword("...")` / `getPassword("...")` のような動作の名前は除きます)、
+環境変数が無いときの既定値(`process.env.DB_PASSWORD || "..."` / `?? "..."`・C# の `GetEnvironmentVariable("DB_PASSWORD") ?? "..."`・
+Python の `os.getenv("DB_PASSWORD") or "..."`・Kotlin / PHP の `?: "..."`・VB の `If(Environment.GetEnvironmentVariable("DB_PASSWORD"), "...")`。
+演算子の前の名前か、代入の先の名前で判定します)、秘密の名前の値と文字列の比較(`txtPassword.Text == "..."` /
+`password.equals("...")` / `"...".equals(password)`。`.Text` / `.value` は除いて名前を見ます)、JavaScript のテンプレート文字列
+(`` apiKey: `...` ``。差し込みの無いもの)です。パスワードを位置で渡す定番の関数も、その位置の文字列を伏せます
+(C# の `new NetworkCredential("user", "...")`・MailKit の `client.Authenticate("user", "...")`(VB も)・
+Java の `DriverManager.getConnection(url, "user", "...")` / `new PasswordAuthentication("user", "...".toCharArray())` /
+`new UsernamePasswordAuthenticationToken("user", "...")`・PHP の `mysqli_connect(...)` / `new PDO($dsn, "user", "...")`・
+Python の `pymysql.connect("host", "user", "...")`・Node の `new Sequelize("db", "user", "...")`)。
+コマンドでは `curl -u ユーザー:パスワード`(`--user` も)、PowerShell の `ConvertTo-SecureString "..." -AsPlainText`
+(`-String` の値・パイプで渡す前の文字列も)と `Invoke-Sqlcmd -Password ...`、`sqlcmd /U sa /P ...` の `/` の形、`net.exe use` を
+伏せます(変数・式の値は除きます)。設定では Gradle の `credentials { password '...' }`(括弧を省いた呼び出し)、
+Java / Spring の `<param name="password" value="..."/>` / `<property name="password" value="..."/>` / `<entry key="password" value="..."/>`、
+C# の Settings.Designer.cs の `[DefaultSettingValueAttribute("...")]`(続くプロパティの名前で判定。App.config の側は以前から
+伏せています)を伏せます。
 キーの末尾の番号(`Password2`・`DB_PASSWORD_2`・`SMTP_PASS1`)は除いて判定します(小文字の `pass1` / `pass2` だけのキー
 (`this.pass1` / `self.pass1` も)はコードの処理の段のことが多いため秘密系とみなしません)。区切りのないキー
 (`DBPASSWORD`・`PGPASSWORD`・`sqlpwd`)も末尾の `password` などで判定します。
@@ -140,16 +158,15 @@ TypeScript / JavaScript・Java・C#・Go・Python のファイルは、言語の
 ランダムな英数字列(高エントロピー値)も既定で伏せます。置き換えた件数は実行時に表示され、
 パックのヘッダーには AI 向けに伏せ字であることを明記します。高エントロピー値として拾うのは 20 文字以上のものなので、
 それより短い値や人が決めた値(`admin123` など)は、キーの名前と書き方を読めたときだけ伏せます。まだ伏せない形もあります
-(setter・builder の引数(`ds.setPassword("...")` / `.password("...")`)、`process.env.X || "..."` / `?? "..."` の既定値、
-YAML のフロー形式(`{password: ...}`)、Rust の `const API_KEY: &str = "..."`・C の `#define`・R の `<-`・Makefile の `:=` / `?=`、
-`curl -u ユーザー:パスワード`、PowerShell の `ConvertTo-SecureString "..." -AsPlainText`、XML の `<param name="password" value="..."/>`、
+(YAML のフロー形式(`{password: ...}`)、Rust の `const API_KEY: &str = "..."`・C の `#define`・R の `<-`・Makefile の `:=` / `?=`、
 キーの最後の語が秘密系でないもの(Rails の `secret_key_base` など。値が長いランダムな文字列なら高エントロピー値として伏せます)、
-C# の `DefaultSettingValue` 属性・複数行にわたる
-文字列の連結、`String.Concat(...)`、VB の文字列や XML リテラルの中に書いた JSON / XML、
+名前の無い値との比較(`p.equals("...")` の `p` のように、比べる値の名前が秘密系でないもの)、上の一覧に無い関数に位置で渡す
+パスワード(Python の `requests.get(url, auth=("user", "..."))` / SQL のパラメーター `AddWithValue("@pw", "...")` など)、
+C# の複数行にわたる文字列の連結、`String.Concat(...)`、VB の文字列や XML リテラルの中に書いた JSON / XML、
 `serializeAs="Xml"` の設定値、
 Dockerfile の空白で区切る古い形の `ENV DB_PASSWORD ...`、URL のパスワードの
 エンコードしていない `;` の後ろ、コマンドの引数の値を `\"...\"` / `""...""` のようにエスケープした引用符で囲んだもの、
-PowerShell の行の継続(`` ` ``)・`Invoke-Sqlcmd -Password`、`net.exe use`、`sqlcmd` の `/U` `/P` の形など)。
+PowerShell の行の継続(`` ` ``)など)。
 
 パックのほかに AI に貼る文面も、同じ規則で伏せます。
 
@@ -303,11 +320,11 @@ slnmix のパッケージ(0.23.0 から)と petari のパッケージ(0.15.0 か
 `npx` で都度取得すると、その時点の最新版になります。審査した版で固定したい場合は、次のいずれかを推奨します。
 
 - 社内の npm レジストリ(ミラー)に審査済みの版だけを置き、そこから取得する
-- `npm install -g tazuna@0.19.0` のように版数を指定して導入し、更新は審査の上で行う
+- `npm install -g tazuna@0.20.0` のように版数を指定して導入し、更新は審査の上で行う
 - ソースを取得して `pnpm install --frozen-lockfile` でロックファイルどおりに入れ、
   ビルドしたものを配布する(ロックファイルに入っているのは開発用の依存だけです)
 
-公開パッケージの中身は `npm pack tazuna@0.19.0` で取得して確認できます。
+公開パッケージの中身は `npm pack tazuna@0.20.0` で取得して確認できます。
 
 ## 9. Claude Code / Codex などのエージェント型ツールとの違い
 

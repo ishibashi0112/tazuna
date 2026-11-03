@@ -30,7 +30,10 @@ DependentUpon 解決済み)に基づいてエクスポートします。
   設定ファイルの appSettings(`<add key="DbPassword" value="..." />`)・My.Settings・
   JSON の `"password": "..."`・`DB_PASSWORD=...` の値も伏せる。0.19.0 から YAML などの引用符のない
   `password: ...`・Oracle の `sqlplus scott/...@orcl` / `CONNECT scott/...`・SQL の `IDENTIFIED BY ...`・
-  PHP の `'password' => '...'` / `define('DB_PASSWORD', '...')` も伏せる(一覧は `docs/SECURITY-REVIEW.md` §4.2)。
+  PHP の `'password' => '...'` / `define('DB_PASSWORD', '...')` も伏せる。0.20.0 から setter・builder
+  (`ds.setPassword("...")`)・環境変数が無いときの既定値(`process.env.DB_PASSWORD || "..."`)・比較・
+  `new NetworkCredential("user", "...")` などの定番の関数・`curl -u`・`ConvertTo-SecureString -AsPlainText`・
+  Gradle の `password '...'`・`<param name="password" value="..."/>` も伏せる(一覧は `docs/SECURITY-REVIEW.md` §4.2)。
   TypeScript / JavaScript・Java・C#・Go・Python は
   文字列とコメントの中だけを伏せ、`process.env.API_KEY` のようなコードは伏せない
 - 既定で厳格モード: ランダムな英数字列(高エントロピー値)も機械的にマスク

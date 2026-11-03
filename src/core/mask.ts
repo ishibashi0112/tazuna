@@ -467,11 +467,12 @@ const BATCH_SET = /(?<=^|[ \t@(&|;"'>])([Ss][Ee][Tt][ \t]+)(\\"|""|"|&quot;)?([A
 
 /**
  * パスワードを引数で渡すコマンドの名前(sqlcmd / osql / isql / bcp の -P、mysql 系の -p... / --password=、
- * net use の共有の後の引数、schtasks の /RP・/P)。パスの途中の語・別の拡張子のファイル名
+ * net use の共有の後の引数、schtasks の /RP・/P。v0.20.0 から curl の -u ユーザー:パスワード・PowerShell の
+ * Invoke-Sqlcmd の -Password・sqlcmd の /P も)。パスの途中の語・別の拡張子のファイル名
  * (/var/lib/mysql/・mysql.py・MySql.Data)は除く。MSBuild の &quot;...\SQLCMD.EXE&quot; と %SQLCMD% も読む
  */
 const CLI_COMMAND =
-  /(?<![\w.-])(sqlcmd|osql|isql|bcp|mysql|mysqldump|mysqladmin|mysqlimport|net[ \t]+use|schtasks|sqlplus|exp|imp|expdp|impdp|sqlldr|dgmgrl|rman)(?:\.exe)?(?=["'\s,\]%!]|&(?:quot|apos);|$)/gi;
+  /(?<![\w.-])(sqlcmd|osql|isql|bcp|mysql|mysqldump|mysqladmin|mysqlimport|net(?:\.exe)?[ \t]+use|schtasks|sqlplus|exp|imp|expdp|impdp|sqlldr|dgmgrl|rman|curl|invoke-sqlcmd)(?:\.exe)?(?=["'\s,\]%!]|&(?:quot|apos);|$)/gi;
 /** 引数の区切りの空白(行の継続(バッチの ^ / シェルの \ の後の改行)も) */
 const CLI_SP = String.raw`(?:[ \t]|\^\r?\n|(?<=[ \t])\\\r?\n)+`;
 /** 引用符で囲まない値の文字(行の継続の ^ / \ は値に含めない) */
@@ -500,6 +501,8 @@ const CLI_ARGS: ReadonlyArray<readonly [RegExp, readonly RegExp[]]> = [
       /((?<=[\s'\[,])-P'[ \t]*,[ \t]*')([^'\r\n]*)/g,
       new RegExp(String.raw`((?<=[\s;])-P)(${CLI_QUOTED})`, "g"),
       new RegExp(String.raw`((?<=[\s"';])-P)(${CLI_BARE(",\\]")})`, "g"),
+      // Windows の / の形(sqlcmd /U sa /P value。v0.20.0)
+      new RegExp(String.raw`((?<=[\s"'])\/P${CLI_SP})(${CLI_VALUE})`, "g"),
     ],
   ],
   [
@@ -512,11 +515,11 @@ const CLI_ARGS: ReadonlyArray<readonly [RegExp, readonly RegExp[]]> = [
   // mysqladmin password 新しいパスワード
   [/^mysqladmin$/i, [new RegExp(String.raw`((?<=\s)password${CLI_SP})(${CLI_VALUE})`, "g")]],
   [
-    /^net[ \t]+use$/i,
+    /^net(?:\.exe)?[ \t]+use$/i,
     [
-      // net use [Z: | *] \\srv\share [/user:x ...] パスワード
+      // net use [Z: | *] \\srv\share [/user:x ...] パスワード(net.exe use も)
       new RegExp(
-        String.raw`(^net[ \t]+use(?:${CLI_SP}(?:[A-Za-z]:|\*))?${CLI_SP}(?:"\\\\[^"\r\n]*"|&quot;\\\\(?:(?!&quot;)[^\r\n])*&quot;|\\\\[^\s"` +
+        String.raw`(^net(?:\.exe)?[ \t]+use(?:${CLI_SP}(?:[A-Za-z]:|\*))?${CLI_SP}(?:"\\\\[^"\r\n]*"|&quot;\\\\(?:(?!&quot;)[^\r\n])*&quot;|\\\\[^\s"` +
           "`" +
           String.raw`]+)(?:${CLI_SP}\/[A-Za-z]+(?::(?:"[^"\r\n]*"|[^\s"]*))?)*${CLI_SP})(?![\/*])(${CLI_VALUE})`,
         "i",
@@ -545,6 +548,13 @@ const CLI_ARGS: ReadonlyArray<readonly [RegExp, readonly RegExp[]]> = [
       ),
     ],
   ],
+  // curl の -u / --user / --proxy-user / -U の ユーザー:パスワード(v0.20.0。パスワードの無い -u user は除く)
+  [
+    /^curl$/i,
+    [new RegExp(String.raw`((?<=[\s"'])(?:-u|-U|--user|--proxy-user)(?:${CLI_SP}|=)?["']?[^\s:"']*:)([^\s"']+)`, "g")],
+  ],
+  // PowerShell の Invoke-Sqlcmd -Password 値(v0.20.0。$ で始まる変数・式は除く)
+  [/^invoke-sqlcmd$/i, [new RegExp(String.raw`((?<=\s)-Password(?:${CLI_SP}|:)(?![$(@]))(${CLI_VALUE})`, "gi")]],
 ];
 /** コマンド名のない引数の文字列(ProcessStartInfo.Arguments = "-S srv -U sa -P ...")の -U ユーザー -P パスワード */
 const CLI_USER_PASSWORD = new RegExp(
@@ -646,7 +656,7 @@ function maskCliArgs(source: string, findings: MaskFinding[]): string {
     }
     for (const [kind, at] of firsts) {
       const tail = segment.slice(at);
-      if (kind === 0 && !/(?<=[\s"'\[,])-U(?!-)/.test(tail)) {
+      if (kind === 0 && !/(?<=[\s"'\[,])-U(?!-)|(?<=[\s"'])\/U(?=[ \t])/.test(tail)) {
         continue;
       }
       for (const pattern of CLI_ARGS[kind]?.[1] ?? []) {
@@ -710,6 +720,72 @@ function maskCliArgs(source: string, findings: MaskFinding[]): string {
   return out + source.slice(last);
 }
 
+/** PowerShell の ConvertTo-SecureString(v0.20.0) */
+const SECURE_STRING = /(?<![\w-])ConvertTo-SecureString(?![\w-])/gi;
+/** その引数(-名前[:値] / 文字列 / 引用符で囲まない語 / 閉じ括弧) */
+const PS_TOKEN = /(-[A-Za-z]+)(?::(\S+))?|("(?:[^"`\r\n]|`.)*"|'(?:[^'\r\n]|'')*'|[^\s"'()]+)|(\))/g;
+/** パイプで渡す文字列("..." | ConvertTo-SecureString -AsPlainText) */
+const SECURE_STRING_PIPED = /("(?:[^"`\r\n]|`.)*"|'(?:[^'\r\n]|'')*')([ \t]*\|[ \t]*)(?=ConvertTo-SecureString\b)/gi;
+
+/**
+ * PowerShell の ConvertTo-SecureString -AsPlainText の平文(-String の値か最初の位置の引数、パイプで渡す前の文字列)を
+ * 伏せる。-AsPlainText の無いもの(暗号化した文字列を戻す使い方)と、変数・式($pw / $(...) / (Read-Host))は伏せない
+ */
+function maskSecureStrings(source: string, findings: MaskFinding[]): string {
+  const spans: Array<{ start: number; end: number }> = [];
+  const add = (value: string, at: number): void => {
+    const quote = /^["']/.test(value) && value.length >= 2 ? value.charAt(0) : "";
+    const inner = quote === "" ? value : value.slice(1, -1);
+    // 引用符で囲まない英字だけの語は説明の文章(ConvertTo-SecureString with -AsPlainText ...)のことが多いので除く
+    if (inner.trim() === "" || inner === MASK || /^[$(@]/.test(inner) || isCliNonSecret(value) || (quote === "" && /^[A-Za-z]+$/.test(inner))) return;
+    spans.push({ start: at + quote.length, end: at + quote.length + inner.length });
+  };
+  for (const m of source.matchAll(SECURE_STRING)) {
+    const from = (m.index ?? 0) + m[0].length;
+    const end = cliCommandEnd(source, from);
+    const args = source.slice(from, end);
+    if (!/(?<![\w-])-AsPlainText(?![\w-])/i.test(args)) continue;
+    let skip = false;
+    for (const t of args.matchAll(PS_TOKEN)) {
+      const at = from + (t.index ?? 0);
+      if (t[4] !== undefined) break;
+      if (t[1] !== undefined) {
+        const name = t[1].toLowerCase();
+        if (name === "-string") {
+          if (t[2] !== undefined) {
+            add(t[2], at + t[1].length + 1);
+            break;
+          }
+        } else if (name === "-key" || name === "-securekey") {
+          skip = t[2] === undefined;
+        }
+        continue;
+      }
+      if (skip) {
+        skip = false;
+        continue;
+      }
+      // -String の値か、最初の位置の引数
+      add(t[3] ?? "", at);
+      break;
+    }
+  }
+  for (const m of source.matchAll(SECURE_STRING_PIPED)) {
+    const after = source.slice((m.index ?? 0) + m[0].length, cliCommandEnd(source, (m.index ?? 0) + m[0].length));
+    if (/(?<![\w-])-AsPlainText(?![\w-])/i.test(after)) add(m[1] ?? "", m.index ?? 0);
+  }
+  if (spans.length === 0) return source;
+  let out = "";
+  let last = 0;
+  for (const span of spans.sort((x, y) => x.start - y.start)) {
+    if (span.start < last) continue;
+    findings.push({ line: lineOf(source, span.start), kind: KIND_PASSWORD });
+    out += source.slice(last, span.start) + MASK;
+    last = span.end;
+  }
+  return out + source.slice(last);
+}
+
 /**
  * SQL の SET col=... の値がバインド変数(`:LOGIN_PASSWORD` / `@p1` / `$1` / `?` / `%s`)か。名前が列名と同じもの、
  * 後ろに , / WHERE が続くもの、前の行に UPDATE があるものだけ(バッチの set ADMIN_PASSWORD=@admin は値として伏せる)
@@ -738,8 +814,13 @@ function isBindMarkerFor(key: string, after: string, before: string): boolean {
 const SHELL_ENV_ARG =
   /(?<=[ \t])((?:-e|--env)(?:[ \t]+|=))("(?:[^"\\\r\n]|\\.)*"|"[^"\r\n]*"|'[^'\r\n]*'|[A-Za-z_][A-Za-z0-9_]*=(?:"(?:[^"\\\r\n]|\\.)*"|"[^"\r\n]*"|'[^'\r\n]*'|(?:\\[^\r\n]|[^\s"'\\])*))/g;
 
-/** キーの値の文字列(C# の @"..." / $"..." / $@"..."、Python の u"..." / r'...' / f"..." / b"..." なども) */
-const KEY_VALUE = String.raw`((?:\$?@|@\$)"(?:[^"\r\n]|"")*"|(?:\$|[rRuUbBfF]{1,2})?"(?:[^"\\\r\n]|\\.)*"|(?:[rRuUbBfF]{1,2})?'(?:[^'\\\r\n]|\\.)*')`;
+/**
+ * キーの値の文字列(C# の @"..." / $"..." / $@"..."、Python の u"..." / r'...' / f"..." / b"..." なども)。
+ * JS のテンプレート文字列・Go の生の文字列(`...`)は差し込み(${...})のない 1 行のものだけ(v0.20.0)
+ */
+const KEY_VALUE = String.raw`((?:\$?@|@\$)"(?:[^"\r\n]|"")*"|(?:\$|[rRuUbBfF]{1,2})?"(?:[^"\\\r\n]|\\.)*"|(?:[rRuUbBfF]{1,2})?'(?:[^'\\\r\n]|\\.)*'|` + "`" + String.raw`(?:[^` + "`" + String.raw`\\\r\n$]|\\.|\$(?!\{))*` + "`" + ")";
+/** KEY_VALUE の文字列の前の接頭辞(@ / $ / r / u / b / f)。引用符は含まない */
+const LITERAL_PREFIX = /^[^"'`]*/;
 /** 型の注釈の型(string / Optional[str] / Map<K, V> / string | null) */
 const KEY_TYPE = String.raw`[A-Za-z_$][\w$.]*(?:<[^<>\r\n]*>|\[[^\[\]\r\n]*\])*\??`;
 
@@ -790,6 +871,380 @@ const KEY_LITERAL_TYPED = new RegExp(
     KEY_VALUE,
   "g",
 );
+
+// ---------------------------------------------------------------------------
+// コードの形 (v0.20.0)。VB は maskVbSource が代入・比較・秘密の名前の関数の引数を読む。ほかの言語にも同じ形を
+// 汎用テキストの規則として足す (言語の分かるソースは maskLanguageSource が文字列の中の部分だけを残す)
+// ---------------------------------------------------------------------------
+
+/**
+ * 秘密の名前のメソッドに文字列を 1 つだけ渡す呼び出し(setter・builder: ds.setPassword("...") / .password("...") /
+ * SetPassword("...") / withPassword("...") / user.set_password("...") / setApiKey("..."))。名前の判定は secretSetterKey
+ */
+const SECRET_SETTER = new RegExp(
+  String.raw`((?<![A-Za-z0-9_$])([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\([ \t]*)` + KEY_VALUE + String.raw`(?=[ \t]*\))`,
+  "g",
+);
+/** setter の名前の前の動詞(React のフックの use... は名前を受け取ることが多いので入れない) */
+const SETTER_VERBS = new Set(["set", "with"]);
+
+/**
+ * setter・builder の名前から値のキーを返す(秘密系でなければ undefined)。set / with の後に秘密系の名前が続くもの
+ * (setPassword / withApiKey / set_db_password)と、名前そのものが秘密系の語のもの(password / apiKey / secret / token)
+ * だけ。validatePassword / hashPassword / getPassword のような動作の名前と、テストの t.pass("...") は除く
+ */
+function secretSetterKey(callee: string): string | undefined {
+  const words = keyWords(callee);
+  const first = words[0] ?? "";
+  if (SETTER_VERBS.has(first) && words.length >= 2) {
+    const key = words.slice(1).join("_");
+    return kindForConfigKey(key) === KIND_PASSWORD ? key : undefined;
+  }
+  const whole = words.join("");
+  const named = words.length === 1 ? whole !== "pass" && SECRET_KEY_WORDS.has(whole) : words.length === 2 && SECRET_KEY_WORDS.has(whole);
+  return named ? callee : undefined;
+}
+
+/**
+ * 既定値の演算子の後の文字列(環境変数が無いときの既定値: process.env.DB_PASSWORD || "..." / ?? "..." /
+ * Python の os.getenv("DB_PASSWORD") or "..." / Kotlin・PHP の ?: "...")。演算子の前の値か代入の先の名前で判定する
+ * (defaultValueKeys)。?: は前に空白のあるものだけ(TS の省略可能なプロパティ password?: "a" | "b" を除く)
+ */
+const DEFAULT_LITERAL = new RegExp(
+  String.raw`(\|\||\?\?|(?<=[ \t])\?:|(?<![\w$.])or(?![\w$]))([ \t]*)` + KEY_VALUE,
+  "g",
+);
+
+/** 既定値の式の代入の先・プロパティのキー(password = / const password: string = / password := / password: / 'password' =>) */
+const DEFAULT_TARGET =
+  /(?:^|[^\w$.])([A-Za-z_$][\w$.]*|"[^"\r\n]*"|'[^'\r\n]*')[ \t]*(?:(?::[ \t]*[\w$.<>\[\]|? ]{1,80})?[ \t]*:?=(?!=)|:(?!:)|=>)[ \t]*(?:await[ \t]+)?$/;
+
+/** close の位置の閉じ括弧に対応する開き括弧の位置(文字列の中の括弧は数えない)。無ければ -1 */
+function openingBracket(text: string, close: number): number {
+  let depth = 0;
+  for (let i = close; i >= 0; i--) {
+    const ch = text.charAt(i);
+    if (ch === '"' || ch === "'" || ch === "`") {
+      // 文字列の始まりの引用符まで戻る(\ の後の引用符は文字列の中)
+      let j = i - 1;
+      while (j >= 0 && !(text.charAt(j) === ch && text.charAt(j - 1) !== "\\")) j -= 1;
+      if (j < 0) return -1;
+      i = j;
+    } else if (ch === ")" || ch === "]") {
+      depth += 1;
+    } else if (ch === "(" || ch === "[") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** text の end の前で終わる値(識別子・メンバーの参照・呼び出し・添字の並び。os.getenv("X") / process.env.X)の始まり */
+function operandStart(text: string, end: number): number {
+  let i = end;
+  // TS の非 null 表明(process.env.X!)
+  if (text.charAt(i - 1) === "!") i -= 1;
+  for (;;) {
+    const ch = text.charAt(i - 1);
+    if (ch === ")" || ch === "]") {
+      const open = openingBracket(text, i - 1);
+      if (open < 0) break;
+      i = open;
+    } else if (/[\w$]/.test(ch)) {
+      while (i > 0 && /[\w$]/.test(text.charAt(i - 1))) i -= 1;
+    } else {
+      break;
+    }
+    // メンバーの参照(. / ?. / :: / ->)が前にあれば続けて読む
+    const access = /(?:\?\.|\.|::|->)$/.exec(text.slice(Math.max(0, i - 2), i));
+    if (access !== null && /[\w$)\]]/.test(text.charAt(i - access[0].length - 1))) {
+      i -= access[0].length;
+      continue;
+    }
+    // 呼び出し・添字の括弧の前の名前(getenv(...) / ENV[...])
+    if ((text.charAt(i) === "(" || text.charAt(i) === "[") && /[\w$)\]]/.test(text.charAt(i - 1))) continue;
+    break;
+  }
+  return i;
+}
+
+/**
+ * 値の式から、値のキーの候補を返す: 最後の名前(process.env.DB_PASSWORD / config.password)か、最後の括弧の中の
+ * キーの形の文字列(getenv("DB_PASSWORD") / ENV["DB_PASSWORD"] / config.get("db.password"))と呼び出しの名前(getPassword())
+ */
+function operandKeys(operand: string): string[] {
+  const text = operand.replace(/!$/, "");
+  const last = /([A-Za-z_$][\w$]*)$/.exec(text);
+  if (last !== null) return [last[1] ?? ""];
+  if (!/[)\]]$/.test(text)) return [];
+  const open = openingBracket(text, text.length - 1);
+  if (open < 0) return [];
+  const keys = [...text.slice(open + 1, -1).matchAll(/["']([A-Za-z_][\w.:-]*)["']/g)].map((m) => m[1] ?? "");
+  const callee = /([A-Za-z_$][\w$]*)$/.exec(text.slice(0, open));
+  if (callee !== null) keys.push(callee[1] ?? "");
+  return keys;
+}
+
+/** 既定値の演算子の前の値(続けて書いた演算子の前の値も)と代入の先から、値のキーの候補を集める */
+function defaultValueKeys(line: string): string[] {
+  const keys: string[] = [];
+  let end = line.length;
+  for (let guard = 0; guard < 8; guard++) {
+    while (end > 0 && /[ \t]/.test(line.charAt(end - 1))) end -= 1;
+    const start = operandStart(line, end);
+    if (start === end) break;
+    keys.push(...operandKeys(line.slice(start, end)));
+    end = start;
+    while (end > 0 && /[ \t]/.test(line.charAt(end - 1))) end -= 1;
+    const op = /(?:\|\||\?\?|\?:|(?<![\w$.])or)$/.exec(line.slice(Math.max(0, end - 3), end));
+    if (op === null || (op[0] === "or" && /[\w$.]/.test(line.charAt(end - 3)))) break;
+    end -= op[0].length;
+  }
+  const target = DEFAULT_TARGET.exec(line.slice(0, end));
+  if (target !== null) keys.push((target[1] ?? "").replace(/^["']|["']$/g, ""));
+  return keys;
+}
+
+/**
+ * 秘密の名前の値と文字列の比較(txtPassword.Text == "..." / password === '...' / "..." != pwd /
+ * password.equals("...") / "...".equals(password))。名前の後ろの .Text / .value / .getText() は除いて判定する(compareKey)
+ */
+const COMPARE_CHAIN = String.raw`[A-Za-z_$][\w$]*(?:(?:\?\.|\.)[A-Za-z_$][\w$]*(?:\(\))?)*`;
+const COMPARE_LITERAL = new RegExp(String.raw`((?<![\w$.])(${COMPARE_CHAIN})[ \t]*(?:===?|!==?)[ \t]*)` + KEY_VALUE, "g");
+const COMPARE_LITERAL_LEFT = new RegExp(KEY_VALUE + String.raw`([ \t]*(?:===?|!==?)[ \t]*(${COMPARE_CHAIN}))(?![\w$(.])`, "g");
+const EQUALS_LITERAL = new RegExp(
+  String.raw`((?<![\w$.])(${COMPARE_CHAIN})\.(?:equals|Equals|equalsIgnoreCase|contentEquals)\([ \t]*)` + KEY_VALUE + String.raw`(?=[ \t]*\))`,
+  "g",
+);
+const EQUALS_LITERAL_LEFT = new RegExp(
+  KEY_VALUE + String.raw`(\.(?:equals|Equals|equalsIgnoreCase)\([ \t]*(${COMPARE_CHAIN})[ \t]*\))`,
+  "g",
+);
+
+/** 比べる値の名前(画面の部品の .Text / .value / .getText() などは除く) */
+function compareKey(chain: string): string {
+  const segments = chain.split(/\?\.|\./).map((segment) => segment.replace(/\(\)$/, ""));
+  while (segments.length > 1 && /^(?:text|value|gettext|getvalue|tostring|trim|strip)$/i.test(segments[segments.length - 1] ?? "")) {
+    segments.pop();
+  }
+  return segments.join(".");
+}
+
+/**
+ * パスワードを位置で渡す定番の関数(v0.20.0): [名前(修飾を含めた末尾)、引数の数からパスワードの引数の位置(0 始まり)]
+ */
+const POSITIONAL_SECRET_CALLS: ReadonlyArray<readonly [RegExp, (count: number) => number | undefined]> = [
+  // .NET: new NetworkCredential("user", "pw"[, "domain"]) / MailKit の client.Authenticate("user", "pw")
+  [/(?:^|\.)NetworkCredential$/, (n) => (n === 2 || n === 3 ? 1 : undefined)],
+  [/\.Authenticate(?:Async)?$/, (n) => (n === 2 ? 1 : undefined)],
+  // Java: DriverManager.getConnection(url, "user", "pw") / DataSource の getConnection("user", "pw") /
+  // JavaMail の new PasswordAuthentication("user", "pw".toCharArray()) / Spring Security・HttpClient の
+  // new UsernamePasswordAuthenticationToken("user", "pw") / new UsernamePasswordCredentials("user", "pw") /
+  // OkHttp の Credentials.basic("user", "pw")
+  [/(?:^|\.)getConnection$/, (n) => (n === 3 ? 2 : n === 2 ? 1 : undefined)],
+  [/(?:^|\.)PasswordAuthentication$/, (n) => (n === 2 ? 1 : undefined)],
+  [/(?:^|\.)UsernamePassword(?:AuthenticationToken|Credentials)$/, (n) => (n === 2 || n === 3 ? 1 : undefined)],
+  [/(?:^|\.)Credentials\.basic$/, (n) => (n === 2 || n === 3 ? 1 : undefined)],
+  // PHP: mysqli_connect("host", "user", "pw", "db") / new mysqli(...) / mysql_connect(...) / new PDO($dsn, "user", "pw")
+  [/^(?:mysqli_connect|mysql_connect|mysqli|PDO)$/, (n) => (n >= 3 ? 2 : undefined)],
+  // Python: MySQLdb.connect("host", "user", "pw", "db") / pymysql.connect(...)。Node: new Sequelize("db", "user", "pw", {...})
+  [/(?:^|\.)(?:MySQLdb|pymysql)\.connect$/, (n) => (n >= 3 ? 2 : undefined)],
+  [/(?:^|\.)Sequelize$/, (n) => (n === 3 || n === 4 ? 2 : undefined)],
+];
+const POSITIONAL_CALL_NAME =
+  /(?<![\w$])(NetworkCredential|Authenticate(?:Async)?|getConnection|PasswordAuthentication|UsernamePassword(?:AuthenticationToken|Credentials)|basic|mysqli_connect|mysql_connect|mysqli|PDO|connect|Sequelize)[ \t]*\(/g;
+/** 引数が文字列だけ(Java の "...".toCharArray() も)か */
+const ARG_LITERAL = new RegExp(String.raw`^\s*` + KEY_VALUE + String.raw`(?:[ \t]*\.[ \t]*(?:toCharArray|ToCharArray)\(\))?\s*$`);
+
+/** open の位置の開き括弧からの引数の範囲(閉じ括弧が見つからなければ undefined) */
+function callArguments(source: string, open: number): Array<{ start: number; end: number }> | undefined {
+  const args: Array<{ start: number; end: number }> = [];
+  const limit = Math.min(source.length, open + 2000);
+  let depth = 0;
+  let argStart = open + 1;
+  for (let i = open + 1; i < limit; i++) {
+    const ch = source.charAt(i);
+    if (ch === '"' || ch === "'" || ch === "`") {
+      // C# の逐語的文字列(@"...")は "" が引用符、ほかは \ の後の文字が文字列の中
+      const verbatim = ch === '"' && source.charAt(i - 1) === "@";
+      let j = i + 1;
+      for (; j < limit; j++) {
+        const c = source.charAt(j);
+        if ((c === "\n" || c === "\r") && ch !== "`") return undefined;
+        if (c === "\\" && !verbatim) {
+          j += 1;
+        } else if (c === ch) {
+          if (verbatim && source.charAt(j + 1) === ch) {
+            j += 1;
+          } else {
+            break;
+          }
+        }
+      }
+      i = j;
+    } else if (ch === "(" || ch === "[" || ch === "{") {
+      depth += 1;
+    } else if (ch === ")" || ch === "]" || ch === "}") {
+      if (depth === 0) {
+        if (ch !== ")") return undefined;
+        args.push({ start: argStart, end: i });
+        return args.length === 1 && source.slice(argStart, i).trim() === "" ? [] : args;
+      }
+      depth -= 1;
+    } else if (ch === "," && depth === 0) {
+      args.push({ start: argStart, end: i });
+      argStart = i + 1;
+    }
+  }
+  return undefined;
+}
+
+/** パスワードを位置で渡す定番の関数の、その位置の文字列を伏せる */
+function maskPositionalCalls(source: string, findings: MaskFinding[]): string {
+  const spans: Array<{ start: number; end: number }> = [];
+  for (const m of source.matchAll(POSITIONAL_CALL_NAME)) {
+    const at = m.index ?? 0;
+    const qualifier = /(?:[A-Za-z_$][\w$]*\.)*$/.exec(source.slice(Math.max(0, at - 120), at))?.[0] ?? "";
+    const name = `${qualifier}${m[1] ?? ""}`;
+    const entry = POSITIONAL_SECRET_CALLS.find(([pattern]) => pattern.test(name));
+    if (entry === undefined) continue;
+    const args = callArguments(source, at + m[0].length - 1);
+    const index = args === undefined ? undefined : entry[1](args.length);
+    const arg = index === undefined ? undefined : args?.[index];
+    if (arg === undefined) continue;
+    const text = source.slice(arg.start, arg.end);
+    const literal = ARG_LITERAL.exec(text);
+    if (literal === null) continue;
+    const value = literal[1] ?? "";
+    const prefix = LITERAL_PREFIX.exec(value)?.[0] ?? "";
+    const inner = value.slice(prefix.length + 1, -1);
+    if (inner.trim() === "" || inner === MASK || isNonSecretValue(inner) || isCliNonSecret(inner)) continue;
+    const start = arg.start + text.indexOf(value) + prefix.length + 1;
+    spans.push({ start, end: start + inner.length });
+  }
+  if (spans.length === 0) return source;
+  let out = "";
+  let last = 0;
+  for (const span of spans.sort((x, y) => x.start - y.start)) {
+    if (span.start < last) continue;
+    findings.push({ line: lineOf(source, span.start), kind: KIND_PASSWORD });
+    out += source.slice(last, span.start) + MASK;
+    last = span.end;
+  }
+  return out + source.slice(last);
+}
+
+/**
+ * 括弧を省いた呼び出しの文字列だけの文(Gradle の credentials { password '...' } / username "..." の行)。
+ * 行の頭(前に { で開いたブロックの名前があってもよい)の名前と文字列だけのもの
+ */
+const COMMAND_CALL_LITERAL = new RegExp(
+  String.raw`(^[ \t]*(?:[A-Za-z_][\w.]*[ \t]*\{[ \t]*)*)([A-Za-z_]\w*)([ \t]+)` + KEY_VALUE + String.raw`(?=[ \t]*(?:[;}]|\/\/|\r?$))`,
+  "gm",
+);
+
+/**
+ * 名前と値を属性に書く要素(Java の <param name="password" value="..."/>・Spring の <property name="password" value="..."/> /
+ * <entry key="password" value="..."/> / <constructor-arg name="password" value="..."/>)。.NET の <add key value> は CONFIG_ADD
+ */
+const NAMED_VALUE_TAG = new RegExp(`<(?:param|property|parameter|entry|constructor-arg|arg)\\b${TAG_BODY}>`, "gi");
+const NAMED_VALUE_ATTR = /(?<![\w-])(name|key|value)(\s*=\s*)("[^"]*"|'[^']*')/gi;
+
+/**
+ * 設定の既定値の属性(C# の Settings.Designer.cs の [DefaultSettingValueAttribute("...")] と、汎用テキストとして伏せる
+ * .vb の <DefaultSettingValueAttribute("...")>)。名前は続くプロパティで決める(VB のソースは maskVbSource が読む)
+ */
+const DEFAULT_SETTING_LITERAL = new RegExp(
+  String.raw`(DefaultSettingValue(?:Attribute)?[ \t]*\([ \t]*)` + KEY_VALUE + String.raw`(?=[ \t]*\)[ \t]*[\]>])`,
+  "g",
+);
+const DEFAULT_SETTING_TARGET =
+  /^[ \t]*\)[ \t]*[\]>][\s\S]{0,400}?(?:\bProperty[ \t]+\[?([A-Za-z_]\w*)|[\w.<>?]+[ \t]+([A-Za-z_]\w*)[ \t]*(?:\r?\n[ \t]*)?\{)/;
+
+/** KEY_VALUE の文字列の接頭辞・引用符・中身 */
+function literalParts(literal: string): { prefix: string; quote: string; inner: string } {
+  const prefix = LITERAL_PREFIX.exec(literal)?.[0] ?? "";
+  return { prefix, quote: literal.charAt(prefix.length), inner: literal.slice(prefix.length + 1, -1) };
+}
+
+/** 文字列の中身を伏せた形(接頭辞と引用符は残す) */
+function maskedLiteral(literal: string): string {
+  const { prefix, quote } = literalParts(literal);
+  return `${prefix}${quote}${MASK}${quote}`;
+}
+
+/** コードの形の値を伏せる(setter・builder、既定値、比較、位置で渡す定番の関数、括弧を省いた呼び出し、名前と値の属性、設定の既定値) */
+function maskCodeShapes(source: string, findings: MaskFinding[]): string {
+  let result = source;
+  const secret = (key: string, inner: string): boolean => isSecretPair(key, inner) && !isTypeName(inner);
+  result = result.replace(SECRET_SETTER, (whole: string, lead: string, callee: string, literal: string, offset: number) => {
+    const key = secretSetterKey(callee);
+    if (key === undefined || !secret(key, literalParts(literal).inner)) return whole;
+    findings.push({ line: lineOf(result, offset), kind: KIND_PASSWORD });
+    return `${lead}${maskedLiteral(literal)}`;
+  });
+  {
+    const before = result;
+    result = before.replace(DEFAULT_LITERAL, (whole: string, op: string, gap: string, literal: string, offset: number) => {
+      const { inner } = literalParts(literal);
+      if (inner === "" || inner === MASK) return whole;
+      // 行の頭から(長い行は直前の 300 文字。1 行の大きいファイルで行の頭まで探し直さないよう、先に切り出す)
+      const near = before.slice(Math.max(0, offset - 300), offset);
+      if (!defaultValueKeys(near.slice(near.lastIndexOf("\n") + 1)).some((key) => secret(key, inner))) return whole;
+      findings.push({ line: lineOf(before, offset), kind: KIND_PASSWORD });
+      return `${op}${gap}${maskedLiteral(literal)}`;
+    });
+  }
+  for (const pattern of [COMPARE_LITERAL, EQUALS_LITERAL]) {
+    result = result.replace(pattern, (whole: string, lead: string, chain: string, literal: string, offset: number) => {
+      if (!secret(compareKey(chain), literalParts(literal).inner)) return whole;
+      findings.push({ line: lineOf(result, offset), kind: KIND_PASSWORD });
+      return `${lead}${maskedLiteral(literal)}`;
+    });
+  }
+  for (const pattern of [COMPARE_LITERAL_LEFT, EQUALS_LITERAL_LEFT]) {
+    result = result.replace(pattern, (whole: string, literal: string, tail: string, chain: string, offset: number) => {
+      if (!secret(compareKey(chain), literalParts(literal).inner)) return whole;
+      findings.push({ line: lineOf(result, offset), kind: KIND_PASSWORD });
+      return `${maskedLiteral(literal)}${tail}`;
+    });
+  }
+  result = maskPositionalCalls(result, findings);
+  result = result.replace(COMMAND_CALL_LITERAL, (whole: string, lead: string, key: string, gap: string, literal: string, offset: number) => {
+    if (!secret(key, literalParts(literal).inner)) return whole;
+    findings.push({ line: lineOf(result, offset), kind: KIND_PASSWORD });
+    return `${lead}${key}${gap}${maskedLiteral(literal)}`;
+  });
+  result = result.replace(NAMED_VALUE_TAG, (tag: string, offset: number) => {
+    let key: string | undefined;
+    let value: string | undefined;
+    for (const attr of tag.matchAll(NAMED_VALUE_ATTR)) {
+      const inner = (attr[3] ?? "").slice(1, -1);
+      if (attr[1]?.toLowerCase() === "value") value ??= inner.trim();
+      else key ??= inner;
+    }
+    // 設定の値なので token / credentials のキーも値によらず伏せる(appSettings と同じ)
+    if (key === undefined || value === undefined || kindForConfigKey(key) !== KIND_PASSWORD) return tag;
+    if (value === "" || value === MASK || isNonSecretValue(value)) return tag;
+    findings.push({ line: lineOf(result, offset), kind: KIND_PASSWORD });
+    return tag.replace(NAMED_VALUE_ATTR, (attr: string, name: string, eq: string, quoted: string) =>
+      name.toLowerCase() === "value" ? `${name}${eq}${quoted.charAt(0)}${MASK}${quoted.charAt(0)}` : attr,
+    );
+  });
+  {
+    const before = result;
+    result = before.replace(DEFAULT_SETTING_LITERAL, (whole: string, lead: string, literal: string, offset: number) => {
+      const { inner } = literalParts(literal);
+      const target = DEFAULT_SETTING_TARGET.exec(before.slice(offset + whole.length, offset + whole.length + 500));
+      const kind = target === null ? undefined : kindForConfigKey(target[1] ?? target[2] ?? "");
+      if (kind === undefined || inner.trim() === "" || inner === MASK || isNonSecretValue(inner)) return whole;
+      findings.push({ line: lineOf(before, offset), kind });
+      return `${lead}${maskedLiteral(literal)}`;
+    });
+  }
+  return result;
+}
 
 /** 設定のキー名の最後の語(と最後の 2 語を続けたもの)がこれらなら秘密系 / ユーザー ID 系 */
 const SECRET_KEY_WORDS = new Set([
@@ -1336,6 +1791,46 @@ function callArgKind(tail: string): string | undefined {
   return undefined;
 }
 
+/**
+ * VB の呼び出しの引数の位置で決まる種別(v0.20.0)。tail は文字列の直前までのコード、after は文字列の後ろ。
+ * - If(式, "既定値") の既定値: 式の中の名前・キーの形の文字列か、If の結果の代入の先が秘密系なら
+ *   (If(Environment.GetEnvironmentVariable("DB_PASSWORD"), "...") / Dim password = If(x, "..."))。3 つの引数の If は除く
+ * - パスワードを位置で渡す定番の関数(client.Authenticate("user", "pw") / AuthenticateAsync)の 2 番目の引数
+ */
+function vbCallPositionKind(tail: string, after: string): string | undefined {
+  const line = tail.slice(tail.lastIndexOf("\n") + 1);
+  // 文字列の中の括弧・カンマを数えないよう、同じ長さの _ に替える
+  const plain = line.replace(/"(?:[^"\r\n]|"")*"/g, (s) => `"${"_".repeat(s.length - 2)}"`);
+  let depth = 0;
+  let commas = 0;
+  let firstComma = -1;
+  for (let i = plain.length - 1; i >= 0; i--) {
+    const ch = plain.charAt(i);
+    if (ch === ")") {
+      depth += 1;
+    } else if (ch === "(") {
+      if (depth > 0) {
+        depth -= 1;
+        continue;
+      }
+      const found = /((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)\s*$/.exec(plain.slice(0, i));
+      const callee = found?.[1] ?? "";
+      if (/^if$/i.test(callee) && commas === 1 && /^\s*\)/.test(after)) {
+        const keys = [
+          ...[...line.slice(i + 1, firstComma).matchAll(/"([A-Za-z_][\w.:-]*)"|([A-Za-z_]\w*)\s*(?:\(\s*\))?\s*$/g)].map((m) => m[1] ?? m[2] ?? ""),
+          ASSIGNMENT_TAIL.exec(line.slice(0, found?.index ?? i))?.[1] ?? "",
+        ];
+        return keys.some((key) => kindForIdentifier(key) === KIND_PASSWORD) ? KIND_PASSWORD : undefined;
+      }
+      return /\.authenticate(?:async)?$/i.test(callee) && commas === 1 ? KIND_PASSWORD : undefined;
+    } else if (ch === "," && depth === 0) {
+      commas += 1;
+      firstComma = i;
+    }
+  }
+  return undefined;
+}
+
 /** コメント内のマスク(コメントアウトされた認証情報コードも対象にする) */
 function maskCommentText(
   comment: string,
@@ -1443,6 +1938,10 @@ function maskVbSource(
             namedArg !== null
               ? kindForIdentifier(namedArg[1] ?? "")
               : callArgKind(tail);
+        }
+        // If(環境変数, "既定値") の既定値と、パスワードを位置で渡す定番の関数(client.Authenticate("user", "pw"))
+        if (kind === undefined) {
+          kind = vbCallPositionKind(tail, content.slice(j + 1, j + 80));
         }
         // My.Settings の既定値(続くプロパティの名前で決める)
         if (kind === undefined && DEFAULT_SETTING_CALLEE.test(tail)) {
@@ -1755,8 +2254,10 @@ function maskGenericText(
     findings.push({ line: lineOf(result, offset), kind: kindForConfigKey(key) ?? KIND_PASSWORD });
     return `${flag}${quote}${key}=${shown}${quote}`;
   });
-  // パスワードを引数で渡すコマンド(sqlcmd -P ... / mysql -p... / net use \\srv\share ... / schtasks /RP ...)
+  // パスワードを引数で渡すコマンド(sqlcmd -P ... / mysql -p... / net use \\srv\share ... / schtasks /RP ... / curl -u ...)
   result = maskCliArgs(result, findings);
+  // PowerShell の ConvertTo-SecureString "..." -AsPlainText
+  result = maskSecureStrings(result, findings);
   // XML 属性形式(値が引用符で囲まれるため接続文字列パターンでは拾えない)
   for (const regex of [ATTR_SECRET, ATTR_SECRET_SINGLE]) {
     result = result.replace(
@@ -1817,7 +2318,7 @@ function maskGenericText(
         return whole;
       }
     }
-    const prefix = /^[^"']*/.exec(literal)?.[0] ?? "";
+    const prefix = LITERAL_PREFIX.exec(literal)?.[0] ?? "";
     const quote = literal.charAt(prefix.length);
     if (!isSecretPair(name, literal.slice(prefix.length + 1, -1))) {
       return whole;
@@ -1832,7 +2333,7 @@ function maskGenericText(
     result = result.replace(
       pattern,
       (whole: string, open: string, key: string, sep: string, literal: string, offset: number) => {
-        const prefix = /^[^"']*/.exec(literal)?.[0] ?? "";
+        const prefix = LITERAL_PREFIX.exec(literal)?.[0] ?? "";
         const quote = literal.charAt(prefix.length);
         const inner = literal.slice(prefix.length + 1, -1);
         if (!isSecretPair(key.slice(1, -1), inner) || isTypeName(inner)) {
@@ -1849,6 +2350,8 @@ function maskGenericText(
       ? whole
       : maskKeyLiteral(whole, key, sep, literal, offset),
   );
+  // コードの形(v0.20.0。setter・builder・既定値・比較・位置で渡す定番の関数・Gradle・<param>・設定の既定値)
+  result = maskCodeShapes(result, findings);
   result = maskConnstrText(result, findings, (index) => lineOf(result, index));
   if (strict) {
     result = maskEntropyText(result, findings, (index) => lineOf(result, index));
