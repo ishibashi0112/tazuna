@@ -571,7 +571,7 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   PHP / Ruby の `=>` など)。2026-11-02 公開 /
   v0.20.0: 2026-11-03 VB 以外のコードの形 (setter・既定値・比較・定番の関数の位置の引数) とコマンド (curl・
   ConvertTo-SecureString・Invoke-Sqlcmd・sqlcmd /P・net.exe use)・Gradle・<param>・Settings.Designer.cs の伏せ方。
-  **未公開** (公開は利用者)。
+  2026-11-03 公開。
   リポジトリ: https://github.com/ishibashi0112/tazuna (旧 https://github.com/ishibashi0112/petari。GitHub が転送する)
   リリース手順: version を上げて `pnpm publish` (`prepublishOnly` が typecheck → test → build を実行。認証はユーザー)
 - **publish 事故と再発防止 (2026-09-14)**: v0.9.0 は `package.json` の version だけ 0.9.0 で、
