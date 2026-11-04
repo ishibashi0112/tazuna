@@ -3,7 +3,7 @@
  * I/O を持たない純粋層: ファイル状態 (FileState) を受け取り、
  * 書き込むべきバイト列と失敗一覧を返す。実際の読み書きは commands/ が行う。
  */
-import { TOOL_NAME } from "../brand.ts";
+import { LEGACY_STATE_DIRECTORY, STATE_DIRECTORY, TOOL_NAME } from "../brand.ts";
 import type { ChangeSet, FileChange, ReplaceBlock } from "../types.ts";
 import {
   EncodingError,
@@ -145,7 +145,47 @@ export interface Plan {
 /** Windows の予約デバイス名 (拡張子付きも不可) */
 const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..+)?$/i;
 
-/** §9: プロジェクトルート相対のみ。絶対パス・`..`・`~`・Windows 特殊パスを拒否 */
+/**
+ * macOS の HFS+ が名前の比較で無視する文字 (git の core.protectHFS と同じ範囲)。
+ * `.g‌it` が `.git` と同じディレクトリを指すため、除いてから名前を比べる
+ */
+const HFS_IGNORABLE = /[‌-‏‪-‮⁪-⁯﻿]/g;
+
+/**
+ * changes.md で変更させないディレクトリ (どの階層にあっても)。
+ * - `.git`: 設定 (core.fsmonitor など) やフックを書き換えると、git の操作 (tazuna 自身の git status、
+ *   VS Code のソース管理、利用者の git diff) のときに任意のコマンドが実行される。しかも .git の中の変更は
+ *   git diff に出ないため、適用後の確認で気づけない
+ * - 状態ディレクトリ (`.tazuna` / 旧名 `.petari`): PC ごとの設定・適用の履歴。プロジェクトのファイルではない
+ * Windows の短い名前 (8.3 形式。`.git` → `GIT~1`) も同じものとして扱う
+ */
+const PROTECTED_DIRECTORIES = [
+  { name: ".git", reason: "'.git' の中は変更できません (git の設定やフックを書き換えると、git の操作のときにコマンドが実行されるため)" },
+  {
+    name: STATE_DIRECTORY,
+    reason: `${TOOL_NAME} の状態ディレクトリ (${STATE_DIRECTORY} / ${LEGACY_STATE_DIRECTORY}) の中は変更できません`,
+  },
+  {
+    name: LEGACY_STATE_DIRECTORY,
+    reason: `${TOOL_NAME} の状態ディレクトリ (${STATE_DIRECTORY} / ${LEGACY_STATE_DIRECTORY}) の中は変更できません`,
+  },
+].map((d) => ({
+  ...d,
+  // 8.3 形式の短い名前: 先頭のドットを除いた最初の 6 文字 + ~ + 数字 (名前は英小文字だけ)
+  shortName: new RegExp(`^${d.name.slice(1, 7)}~[0-9]+$`),
+}));
+
+/** 保護するディレクトリに当たる名前なら、その理由 */
+function protectedSegmentReason(segment: string): string | null {
+  // Windows は末尾のドット/空白を無視し、大文字小文字を区別しない。macOS も既定で区別しない
+  const name = segment.replace(HFS_IGNORABLE, "").replace(/[. ]+$/, "").toLowerCase();
+  for (const d of PROTECTED_DIRECTORIES) {
+    if (name === d.name || d.shortName.test(name)) return d.reason;
+  }
+  return null;
+}
+
+/** §9: プロジェクトルート相対のみ。絶対パス・`..`・`~`・Windows 特殊パス・.git と状態ディレクトリを拒否 */
 export function invalidPathReason(path: string): string | null {
   if (path.trim() === "") return "パスが空です";
   if (path.startsWith("/") || path.startsWith("\\\\") || /^[a-zA-Z]:/.test(path)) {
@@ -158,6 +198,10 @@ export function invalidPathReason(path: string): string | null {
   // Windows は末尾のドット/空白を無視して解釈するため、除去してから予約名判定する
   if (segments.some((s) => WINDOWS_RESERVED.test(s.replace(/[. ]+$/, "")))) {
     return "Windows の予約デバイス名 (CON, NUL, COM1 等) を含むパスは使えません";
+  }
+  for (const s of segments) {
+    const reason = protectedSegmentReason(s);
+    if (reason !== null) return reason;
   }
   return null;
 }
