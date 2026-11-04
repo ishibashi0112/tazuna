@@ -524,7 +524,7 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   **symlink ディレクトリ経由のルート外書き込みを拒否**。undo は対象が symlink 化されていても拒否
 - パス規則: 絶対パス・UNC・ドライブレター・`..`・`~`・`:` (ADS)・Windows 予約デバイス名を拒否
 - `.git` と状態ディレクトリ (`.tazuna` / `.petari`) の中への変更も拒否 (どの階層でも。大文字小文字・末尾のドットと
-  空白・HFS+ が無視する文字・8.3 の短い名前 `GIT~1` を同一視。v0.22.1)。2026-11-04 に、changes.md で `.git/config` に
+  空白・HFS+ が無視する文字・8.3 の短い名前 `GIT~1` を同一視。manifest の `\` 区切りも区切りとして見る。v0.22.1)。2026-11-04 に、changes.md で `.git/config` に
   `core.fsmonitor` を書くと次の適用の `git status` がそのコマンドを実行すること、`.git` の中の変更は git diff に出ないことを
   再現した (watch は確認なし)。git は `-c core.fsmonitor=false` + `GIT_OPTIONAL_LOCKS=0` で呼ぶ (infra/git.ts。
   `--no-optional-locks` は git 2.15 未満で使えないため環境変数)。git の子プロセスを足すときも同じ指定を使う

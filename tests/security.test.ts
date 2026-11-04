@@ -63,6 +63,9 @@ describe("invalidPathReason: .git と状態ディレクトリ (2026-11-04)", () 
       "git~2/hooks/post-checkout",
       ".g‌it/config",
       "﻿.git/config",
+      // manifest のパスはパーサーを通らないため `\` 区切りのこともある (Windows では区切りになる)
+      ".git\\config",
+      "sub\\.git\\hooks\\pre-commit",
     ]) {
       expect(invalidPathReason(p), p).toContain("'.git' の中は変更できません");
     }
@@ -71,6 +74,10 @@ describe("invalidPathReason: .git と状態ディレクトリ (2026-11-04)", () 
     for (const p of [".tazuna/config.json", ".petari/history/x/manifest.json", "menu/.TAZUNA/config.json", "TAZUNA~1/config.json"]) {
       expect(invalidPathReason(p), p).toContain("状態ディレクトリ");
     }
+  });
+  it("`\\` 区切りの `..` も拒否する (manifest のパス)", () => {
+    expect(invalidPathReason("..\\evil.txt")).not.toBeNull();
+    expect(invalidPathReason("src\\..\\..\\evil.txt")).not.toBeNull();
   });
   it("git の関連ファイルなど、紛らわしいが正当な名前は許可する", () => {
     for (const p of [

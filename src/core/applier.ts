@@ -192,7 +192,9 @@ export function invalidPathReason(path: string): string | null {
     return "絶対パスは使えません (プロジェクトルート相対で指定してください)";
   }
   if (path.includes(":")) return "':' を含むパスは使えません (Windows の代替データストリーム対策)";
-  const segments = path.split("/");
+  // changes.md のパスはパーサーが `/` にそろえる。manifest (非信頼入力) のパスは `\` のこともあり、
+  // Windows では `\` も区切りになるため、どちらでも区切る
+  const segments = path.split(/[\\/]/);
   if (segments.includes("..")) return "'..' を含むパスは使えません";
   if (path.startsWith("~")) return "'~' で始まるパスは使えません";
   // Windows は末尾のドット/空白を無視して解釈するため、除去してから予約名判定する
