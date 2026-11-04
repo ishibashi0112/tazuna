@@ -333,10 +333,14 @@ npm の tazuna は 2026-11-01 時点で空き。
   ②**当てなかった changes.md の片付け** (infra/unapplied.ts): Downloads 由来で failed / already-applied / duplicate の
   ものを状態ディレクトリの unapplied/ へ `YYYY-MM-DD_HHmmss_<元の名前>` で移す (rename、別ドライブなら写して元を消す。
   消せなければ写しを消して残す)。プロジェクト直下のものは動かさない (手で直しながら保存のたびに当て直す使い方を残す)。
-  --dry-run では動かさない。二重適用で止めたときの「--force を付けて再実行」は watch では出さず、移した先のパスで
-  コマンドを示す ③**別のリポジトリ向けらしい changes.md** (core/other-repo.ts の looksLikeOtherRepository): 検証の
+  --dry-run では動かさない。移すのは結果を出してから 15 秒後 (WatchOptions.tidyDelayMs。テストは 0)、同じ時刻・サイズで
+  残っているときだけ (別のリポジトリの watch が同じファイルを当てる分を待つ。同じ名前のファイルがあると ③ で見分けられず、
+  すぐ移すと向こうが当てられなかった。別視点のレビューで再現)。置き場は `isInsideRoot(root, join(dir, "x"))` で置き場自身の
+  symlink も確かめる。二重適用で止めたときの「--force を付けて再実行」は watch では出さず、移したときに移した先のパスで
+  コマンドを示す (describeTidy)。--root 付きで始めた watch は案内するコマンドにも --root を付ける。runApply の例外は
+  kind "error" (読めなかったとは書かず git diff を促す) ③**別のリポジトリ向けらしい changes.md** (core/other-repo.ts の looksLikeOtherRepository): 検証の
   失敗が target-missing だけ、replace / rewrite が 1 つ以上、挙げたファイルがルートに 1 つも無く、replace / rewrite の
-  対象と同じ名前のファイルが git の一覧 (infra/git.ts の listGitFiles。pack-io.ts から移した) に無いときだけ。watch は
+  対象と同じ名前のファイルが git の一覧 (infra/git.ts の listGitFiles。pack-io.ts から移した。前の条件を満たしたときだけ求める) に無いときだけ。watch は
   当てずレポートも出さず (クリップボードを上書きしない) Downloads に残す (kind "other-repo")。手で実行した tazuna は
   注記してから従来どおりレポートする。同じ名前があればフォルダの書き違いとみなす。create だけのものは見分けない
 

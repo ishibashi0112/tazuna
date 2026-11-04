@@ -3,9 +3,9 @@
  * 新着 1 件ごとに runApply へ確認なしで渡す。検証・失敗レポートの自動コピー・
  * 二重適用の防止・成功後の履歴への移動は `tazuna` (引数なし) と同じ。Ctrl+C で終了する。
  * 結果はターミナルのタイトルでも知らせ (--bell でベルも。既定は鳴らさない)、
- * 当てなかった Downloads の changes.md は状態ディレクトリの unapplied/ へ移す。
+ * 当てなかった Downloads の changes.md は少し待ってから状態ディレクトリの unapplied/ へ移す。
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, relative } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
@@ -17,22 +17,34 @@ import { listChangesFiles, resolveDownloadsDir } from "../infra/downloads.ts";
 import { findProjectRoot } from "../infra/root.ts";
 import { err, out, outEmphasis, restoreTerminalTitle, ringBell, setTerminalTitle } from "../infra/term.ts";
 import { moveToUnapplied, unappliedDir } from "../infra/unapplied.ts";
-import { runApply, type ApplyResult, type DetectedChanges } from "./apply.ts";
+import { runApply, type ApplyOutcomeKind, type ApplyResult, type DetectedChanges } from "./apply.ts";
 
 export interface WatchOptions {
   /** 監視を止める合図 (テスト用。指定がなくても Ctrl+C で止まる) */
   signal?: AbortSignal;
   /** 観測の間隔 (ミリ秒)。テスト用 */
   intervalMs?: number;
+  /** 当てなかった changes.md を unapplied/ へ移すまでの猶予 (ミリ秒)。テスト用 */
+  tidyDelayMs?: number;
 }
 
 const DEFAULT_INTERVAL_MS = 1000;
+/**
+ * 当てなかった changes.md を移すまでの猶予。Downloads は複数のリポジトリで共通なので、別のリポジトリの
+ * watch もほぼ同時に同じファイルを見つけて当てに行く (このリポジトリにも同じ名前のファイルがあって
+ * 別のリポジトリ向けと見分けられなかったとき、すぐ移すとそちらの watch が当てられなくなる)。
+ * どの watch も 1 秒間隔の 2 回の観測で渡すので、15 秒あれば向こうの適用が先に終わる
+ */
+const DEFAULT_TIDY_DELAY_MS = 15_000;
 
 const pad2 = (n: number): string => String(n).padStart(2, "0");
 const clock = (d: Date): string => `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 
 /** 引数に渡すパスを引用符で囲む (Downloads のファイル名は "changes (1).md" のように空白を含む) */
 const quoted = (path: string): string => `"${path}"`;
+
+/** watch での 1 件の結果。runApply の結果に、runApply が例外で止まったとき ("error") を足したもの */
+export type WatchOutcomeKind = ApplyOutcomeKind | "error";
 
 /** 1 件の結果をどう知らせるか (タイトル・結果の行)。純粋関数 */
 export interface WatchReport {
@@ -44,14 +56,22 @@ export interface WatchReport {
   details: string[];
 }
 
+/** 案内するコマンドに付ける --root (watch を --root 付きで始めたときだけ。別のフォルダからでも同じルートになるように) */
+const rootSuffix = (rootOption: string | null): string => (rootOption === null ? "" : ` --root ${quoted(rootOption)}`);
+
 export function describeWatchResult(
-  result: Pick<ApplyResult, "kind" | "files" | "reportCopied">,
-  file: { path: string; movedTo: string | null; moveError: string | null },
+  result: { kind: WatchOutcomeKind; files: number; reportCopied: boolean },
+  file: {
+    path: string;
+    /** 後で unapplied/ へ移すとき、その先 (ルートからの相対) と猶予の秒数 */
+    tidy: { dir: string; afterSec: number } | null;
+    rootOption: string | null;
+  },
 ): WatchReport {
-  const kept = file.movedTo ?? file.path;
-  const moved: string[] = [];
-  if (file.movedTo !== null) moved.push(`changes.md は ${file.movedTo} へ移しました`);
-  if (file.moveError !== null) moved.push(`changes.md を移せませんでした (${file.moveError})。${file.path} に残っています`);
+  const later: string[] =
+    file.tidy === null
+      ? []
+      : [`changes.md は${file.tidy.afterSec > 0 ? ` ${file.tidy.afterSec} 秒後に` : ""} ${file.tidy.dir} へ移します`];
   switch (result.kind) {
     case "applied":
       return {
@@ -63,7 +83,7 @@ export function describeWatchResult(
       return {
         title: "– 適用済み (書き込みなし)",
         headline: "– すべて適用済みでした。何も書き込んでいません",
-        details: moved,
+        details: later,
       };
     case "failed":
       return {
@@ -71,16 +91,17 @@ export function describeWatchResult(
         headline: result.reportCopied
           ? "✗ 適用できませんでした。失敗レポートをクリップボードにコピー済みです → AI チャットに貼ってください"
           : "✗ 適用できませんでした。上の失敗レポートを AI チャットに貼ってください",
-        details: [...moved, "修正版の changes.md が届けば、そのまま当てます"],
+        details: [...later, "修正版の changes.md が届けば、そのまま当てます"],
       };
     case "duplicate":
       return {
         title: "! 止めました (適用済みの changes.md)",
         headline: "! この changes.md は適用済みのため、当てずに止めました (二重適用の防止)",
         details: [
-          ...moved,
           "以前にダウンロードしたものを取り違えていないか確認してください (最新の回答の changes.md をダウンロードすれば当てます)",
-          `git などで戻したため当て直したいときだけ: ${TOOL_NAME} ${quoted(kept)} --force`,
+          ...(file.tidy === null
+            ? [forceLine(file.path, file.rootOption)]
+            : [...later, "git などで戻したため当て直したいときのコマンドは、移したときに示します"]),
         ],
       };
     case "other-repo":
@@ -89,7 +110,7 @@ export function describeWatchResult(
         headline: "! 対象のファイルがこのリポジトリに無いため、当てていません (別のリポジトリ向けの changes.md のようです)",
         details: [
           `ファイルは ${file.path} に残しています (そのリポジトリで動いている watch や ${TOOL_NAME} が当てられます)`,
-          `このリポジトリ向けなら ${TOOL_NAME} ${quoted(file.path)} で失敗の理由を確かめられます`,
+          `このリポジトリ向けなら ${TOOL_NAME} ${quoted(file.path)}${rootSuffix(file.rootOption)} で失敗の理由を確かめられます`,
         ],
       };
     case "dry-run":
@@ -105,7 +126,32 @@ export function describeWatchResult(
         headline: `✗ changes.md を読めませんでした: ${file.path}`,
         details: [],
       };
+    case "error":
+      return {
+        title: "✗ エラー (git diff を確認)",
+        headline: "✗ 処理の途中でエラーになりました (上のメッセージ)",
+        details: [
+          "書きかけのファイルがないか git diff で確認してください",
+          `changes.md は ${file.path} に残しています`,
+        ],
+      };
   }
+}
+
+function forceLine(path: string, rootOption: string | null): string {
+  return `git などで戻したため当て直したいときだけ: ${TOOL_NAME} ${quoted(path)} --force${rootSuffix(rootOption)}`;
+}
+
+/** 猶予の後に unapplied/ へ移したとき (移せなかったとき) の行。純粋関数 */
+export function describeTidy(
+  kind: WatchOutcomeKind,
+  file: { path: string; movedTo: string | null; moveError: string | null; rootOption: string | null },
+): string[] {
+  const lines: string[] = [];
+  if (file.movedTo !== null) lines.push(`changes.md を ${file.movedTo} へ移しました`);
+  if (file.moveError !== null) lines.push(`changes.md を移せませんでした (${file.moveError})。${file.path} に残っています`);
+  if (kind === "duplicate") lines.push(forceLine(file.movedTo ?? file.path, file.rootOption));
+  return lines;
 }
 
 export async function watchCommand(argv: string[], options: WatchOptions = {}): Promise<number> {
@@ -149,6 +195,54 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
   // タイトルにはリポジトリの名前を入れる (複数の watch を開いても見分けられるように)
   const repoName = basename(root);
   const title = (text: string): void => setTerminalTitle(`${TOOL_NAME} watch: ${text} — ${repoName}`);
+  const rootOption = values.root === undefined ? null : root;
+  const tidyRel = relative(root, unappliedDir(root));
+  const tidyDelay = options.tidyDelayMs ?? DEFAULT_TIDY_DELAY_MS;
+
+  // 猶予の後に unapplied/ へ移すもの。渡したときと同じ時刻・サイズのまま残っているときだけ移す
+  // (無くなっていれば別のリポジトリの watch が当てたか利用者が動かした。変わっていれば新着として渡し直される)
+  interface PendingTidy {
+    path: string;
+    stamp: string;
+    due: number;
+    kind: WatchOutcomeKind;
+  }
+  const pendingTidy: PendingTidy[] = [];
+  const stampOf = (path: string): string | null => {
+    try {
+      const st = statSync(path);
+      return `${st.mtimeMs}:${st.size}`;
+    } catch {
+      return null;
+    }
+  };
+  const tidyDue = (): void => {
+    const now = Date.now();
+    for (let i = 0; i < pendingTidy.length; ) {
+      const p = pendingTidy[i] as PendingTidy;
+      if (p.due > now) {
+        i++;
+        continue;
+      }
+      pendingTidy.splice(i, 1);
+      const current = stampOf(p.path);
+      if (current === null) {
+        out(`(${clock(new Date())}) ${p.path} は移す前に無くなっていました (別のリポジトリの watch が当てたか、手で動かしたようです)`);
+        continue;
+      }
+      if (current !== p.stamp) continue;
+      let movedTo: string | null = null;
+      let moveError: string | null = null;
+      try {
+        movedTo = moveToUnapplied(root, p.path, new Date());
+      } catch (e) {
+        moveError = e instanceof Error ? e.message : String(e);
+      }
+      const lines = describeTidy(p.kind, { path: p.path, movedTo, moveError, rootOption });
+      out(`(${clock(new Date())}) ${lines[0] ?? ""}`);
+      for (const line of lines.slice(1)) out(`  ${line}`);
+    }
+  };
 
   try {
     // 開始時に既にあるファイルは対象外 (古い changes.md を黙って当てない)
@@ -162,7 +256,7 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
     }
     out(
       `  結果はこのターミナルのタイトル${values.bell ? "とベル" : ""}でも知らせます。` +
-        `当てなかった Downloads の changes.md は ${relative(root, unappliedDir(root))} へ移します`,
+        `当てなかった Downloads の changes.md は少し待ってから ${tidyRel} へ移します`,
     );
     title("待機中");
 
@@ -173,10 +267,13 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
       } catch {
         break; // 中断
       }
+      tidyDue();
       for (const f of observeWatch(state, list())) {
         if (stop.signal.aborted) break;
         // 別のリポジトリの watch が先に当てて履歴へ移したものは、黙って見送る
         if (!existsSync(f.path)) continue;
+        // 移すのを待っていたものが書き換わって渡し直されたら、前の結果では移さない
+        for (let i = pendingTidy.length - 1; i >= 0; i--) if (pendingTidy[i]?.path === f.path) pendingTidy.splice(i, 1);
         out("");
         out(`━━ ${clock(new Date())} 新しい changes.md: ${f.path}`);
         let text: string;
@@ -193,36 +290,35 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
           continue;
         }
         title("適用中");
-        let result: ApplyResult;
+        let result: Pick<ApplyResult, "files" | "reportCopied"> & { kind: WatchOutcomeKind };
         try {
           result = await runApply(applyArgs, { path: f.path, origin: f.origin });
         } catch (e) {
-          // 1 件の失敗で監視ごと止めない
+          // 1 件の失敗で監視ごと止めない (書き込みの途中かもしれないので、読めなかったとは書かない)
           err(`${TOOL_NAME}: ${e instanceof Error ? e.message : String(e)}`);
-          result = { code: 1, kind: "unreadable", files: 0, reportCopied: false };
+          result = { kind: "error", files: 0, reportCopied: false };
         }
         // 当てなかった Downloads の changes.md は片付ける。プロジェクト直下のものは利用者が置いて
         // 手で直しながら当て直すことがあるので動かさない。別のリポジトリ向けらしいものは、そちらの
         // watch が当てられるよう残す。dry-run は何も動かさない
-        let movedTo: string | null = null;
-        let moveError: string | null = null;
         const tidy =
           f.origin === "downloads" &&
           !values["dry-run"] &&
           (result.kind === "failed" || result.kind === "already-applied" || result.kind === "duplicate");
-        if (tidy && existsSync(f.path)) {
-          try {
-            movedTo = moveToUnapplied(root, f.path, new Date());
-          } catch (e) {
-            moveError = e instanceof Error ? e.message : String(e);
-          }
+        if (tidy) {
+          pendingTidy.push({ path: f.path, stamp: `${f.mtimeMs}:${f.size}`, due: Date.now() + tidyDelay, kind: result.kind });
         }
-        const report = describeWatchResult(result, { path: f.path, movedTo, moveError });
+        const report = describeWatchResult(result, {
+          path: f.path,
+          tidy: tidy ? { dir: tidyRel, afterSec: Math.ceil(tidyDelay / 1000) } : null,
+          rootOption,
+        });
         out("");
         outEmphasis(report.headline);
         for (const line of report.details) out(`  ${line}`);
         title(`${report.title} (${clock(new Date()).slice(0, 5)})`);
         if (values.bell) ringBell();
+        tidyDue();
         out("");
         out("引き続き待っています (Ctrl+C で終了)");
       }
@@ -232,6 +328,7 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
     options.signal?.removeEventListener("abort", onAbort);
     restoreTerminalTitle();
   }
+  for (const p of pendingTidy) out(`移す前に終了したため、そのまま残しています: ${p.path}`);
   out("監視を終了しました。");
   return 0;
 }

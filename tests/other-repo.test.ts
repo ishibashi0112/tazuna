@@ -13,7 +13,7 @@ const remove = (path: string): FileChange => ({ path, op: "delete" }) as unknown
 
 describe("looksLikeOtherRepository (§4.7)", () => {
   const none = (): boolean => false;
-  const names = new Set(["main.vb", "readme.md"]);
+  const names = (): ReadonlySet<string> => new Set(["main.vb", "readme.md"]);
 
   it("replace の対象が無く、同じ名前のファイルもリポジトリに無ければ true", () => {
     expect(looksLikeOtherRepository([replace("src/Orders/OrderForm.vb"), create("src/Orders/New.vb")], none, names)).toBe(true);
@@ -33,7 +33,16 @@ describe("looksLikeOtherRepository (§4.7)", () => {
   });
 
   it("リポジトリのファイル名の一覧が無ければ (git でない) 判定しない", () => {
-    expect(looksLikeOtherRepository([replace("x/OrderForm.vb")], none, null)).toBe(false);
+    expect(looksLikeOtherRepository([replace("x/OrderForm.vb")], none, () => null)).toBe(false);
+  });
+
+  it("挙げたファイルがルートにあるとき・create / delete だけのときは、一覧を求めない (git ls-files を走らせない)", () => {
+    const listing = vi.fn(names);
+    expect(looksLikeOtherRepository([replace("Main.vb")], () => true, listing)).toBe(false);
+    expect(looksLikeOtherRepository([create("a/b.vb")], none, listing)).toBe(false);
+    expect(listing).not.toHaveBeenCalled();
+    expect(looksLikeOtherRepository([replace("x/OrderForm.vb")], none, listing)).toBe(true);
+    expect(listing).toHaveBeenCalledTimes(1);
   });
 
   it("fileNameKey は / と \\ のどちらの区切りでも最後の名前を小文字で返す", () => {

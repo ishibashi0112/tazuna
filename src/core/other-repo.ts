@@ -10,7 +10,8 @@
  * - changes.md が挙げるファイル (どの操作でも) が、ルートに 1 つも無い
  * - replace / rewrite の対象と同じ名前のファイルが、リポジトリのどこにも無い
  *   (同じ名前があれば、AI がフォルダを書き違えた可能性が高い。そのときは失敗レポートが役に立つ)
- * リポジトリのファイル名の一覧が得られないとき (git のリポジトリでない・git が無い) は判定しない
+ * リポジトリのファイル名の一覧が得られないとき (git のリポジトリでない・git が無い) は判定しない。
+ * 一覧は前の 2 つを満たしたときだけ求める (git ls-files は大きなリポジトリでは時間がかかるため)
  *
  * create だけの changes.md は見分けられない (どのリポジトリにも作れるため)
  */
@@ -24,11 +25,12 @@ export function fileNameKey(path: string): string {
 export function looksLikeOtherRepository(
   changes: readonly FileChange[],
   existsInRoot: (path: string) => boolean,
-  repositoryFileNames: ReadonlySet<string> | null,
+  repositoryFileNames: () => ReadonlySet<string> | null,
 ): boolean {
-  if (repositoryFileNames === null) return false;
   const modifying = changes.filter((c) => c.op === "replace" || c.op === "rewrite");
   if (modifying.length === 0) return false;
   if (changes.some((c) => existsInRoot(c.path))) return false;
-  return modifying.every((c) => !repositoryFileNames.has(fileNameKey(c.path)));
+  const names = repositoryFileNames();
+  if (names === null) return false;
+  return modifying.every((c) => !names.has(fileNameKey(c.path)));
 }

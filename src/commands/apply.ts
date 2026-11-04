@@ -351,15 +351,15 @@ export async function runApply(argv: string[], detected?: DetectedChanges): Prom
 
   // 対象のファイルがどれもこのリポジトリに無い = 別のリポジトリ向けらしい (§4.7)。watch では当てずに残し
   // (失敗レポートでクリップボードを上書きしない。正しいリポジトリの watch が当てる)、手で実行したときは注記する
+  // 失敗が「対象のファイルが無い」だけのときに限る (パスの誤り・symlink などはレポートが要る)
   const otherRepository =
     !plan.ok &&
+    plan.failures.length > 0 &&
+    plan.failures.every((f) => f.kind === "target-missing") &&
     looksLikeOtherRepository(
       changeSet.files,
       (path) => states.get(path)?.exists === true,
-      // 失敗が「対象のファイルが無い」だけのときに限る (パスの誤り・symlink などはレポートが要る)
-      plan.failures.length > 0 && plan.failures.every((f) => f.kind === "target-missing")
-        ? repositoryFileNames(root)
-        : null,
+      () => repositoryFileNames(root),
     );
   if (otherRepository && detected !== undefined) {
     out(`changes.md の対象 (どれもこのリポジトリ ${root} にありません):`);

@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { describeWatchResult, watchCommand } from "../src/commands/watch.ts";
+import { describeTidy, describeWatchResult, watchCommand } from "../src/commands/watch.ts";
 import { hasChangesHeading } from "../src/core/parser.ts";
 import { initialWatchState, observeWatch, type WatchedFile } from "../src/core/watch.ts";
 import type { Manifest } from "../src/infra/history.ts";
@@ -117,10 +117,10 @@ describe("watchCommand (§4.7)", () => {
     }
   }
 
-  /** 監視を始め、開始時の一覧を取り終えるまで待つ */
-  async function start(dir: string): Promise<{ stop: () => Promise<number> }> {
+  /** 監視を始め、開始時の一覧を取り終えるまで待つ (当てなかったものを移す猶予は既定で 0) */
+  async function start(dir: string, tidyDelayMs = 0): Promise<{ stop: () => Promise<number> }> {
     const ac = new AbortController();
-    const running = watchCommand(["--root", dir], { signal: ac.signal, intervalMs: 10 });
+    const running = watchCommand(["--root", dir], { signal: ac.signal, intervalMs: 10, tidyDelayMs });
     await waitFor(() => output.join("").includes("到着を待っています"), "start");
     return {
       stop: async () => {
@@ -185,6 +185,60 @@ describe("watchCommand (§4.7)", () => {
     expect(await w.stop()).toBe(0);
     expect(readFileSync(join(dir, "legacy.vb"), "utf8")).toContain("Dim count As Integer = 100");
     expect(unapplied(dir)).toHaveLength(1);
+  });
+
+  it("当てなかった changes.md は猶予の後に移す (猶予の間は Downloads に残す)", async () => {
+    const { dir, downloads } = setup();
+    const w = await start(dir, 300);
+    writeFileSync(join(downloads, "changes.md"), FAILING, "utf8");
+    await waitFor(() => output.join("").includes("引き続き待っています"), "failed");
+    expect(output.join("")).toContain("changes.md は 1 秒後に .tazuna");
+    expect(existsSync(join(downloads, "changes.md"))).toBe(true);
+    expect(unapplied(dir)).toEqual([]);
+    await waitFor(() => unapplied(dir).length === 1, "moved");
+    expect(existsSync(join(downloads, "changes.md"))).toBe(false);
+    expect(output.join("")).toMatch(/\(\d\d:\d\d:\d\d\) changes\.md を .+ へ移しました/);
+    expect(await w.stop()).toBe(0);
+  });
+
+  it("猶予の間に無くなったもの (別のリポジトリの watch が当てた) は移さずにそう書く", async () => {
+    const { dir, downloads } = setup();
+    const w = await start(dir, 300);
+    writeFileSync(join(downloads, "changes.md"), FAILING, "utf8");
+    await waitFor(() => output.join("").includes("引き続き待っています"), "failed");
+    rmSync(join(downloads, "changes.md"));
+    await waitFor(() => output.join("").includes("移す前に無くなっていました"), "vanished");
+    expect(await w.stop()).toBe(0);
+    expect(unapplied(dir)).toEqual([]);
+  });
+
+  it("同じ Downloads を見る 2 つの watch: 当てられない側が先に片付けて、当てられる側の分を奪わない", async () => {
+    const a = setup();
+    const b = setup();
+    // A にも同じ名前のファイルがある (中身が違うので SEARCH が当たらず、別のリポジトリ向けとも見分けられない)
+    writeFileSync(join(a.dir, "legacy.vb"), "Module M\nDim other As String\nEnd Module\n", "utf8");
+    writeFileSync(join(a.dir, ".tazuna", "config.json"), JSON.stringify({ downloadsDir: b.downloads, clipReportOnFailure: false }), "utf8");
+    const wa = await start(a.dir, 1000);
+    output.length = 0;
+    const wb = await start(b.dir, 1000);
+    writeFileSync(join(b.downloads, "changes.md"), CHANGES, "utf8");
+    await waitFor(() => readFileSync(join(b.dir, "legacy.vb"), "utf8").includes("Dim count As Integer = 100"), "B applied");
+    // どちらが先に見つけても、A の猶予が過ぎた後に A の unapplied/ へ入っていない
+    await new Promise((r) => setTimeout(r, 1300));
+    expect(await wa.stop()).toBe(0);
+    expect(await wb.stop()).toBe(0);
+    expect(unapplied(a.dir)).toEqual([]);
+  });
+
+  it("移す前に終了したものは Downloads に残し、そう書く", async () => {
+    const { dir, downloads } = setup();
+    const w = await start(dir, 60_000);
+    writeFileSync(join(downloads, "changes.md"), FAILING, "utf8");
+    await waitFor(() => output.join("").includes("引き続き待っています"), "failed");
+    expect(await w.stop()).toBe(0);
+    expect(output.join("")).toContain(`移す前に終了したため、そのまま残しています: ${join(downloads, "changes.md")}`);
+    expect(existsSync(join(downloads, "changes.md"))).toBe(true);
+    expect(unapplied(dir)).toEqual([]);
   });
 
   it("プロジェクト直下の失敗した changes.md は動かさない (手で直して当て直せるように)", async () => {
@@ -324,7 +378,7 @@ describe("watchCommand (§4.7)", () => {
 });
 
 describe("describeWatchResult (§4.7 結果の知らせ方)", () => {
-  const file = { path: "/dl/changes (1).md", movedTo: null, moveError: null };
+  const file = { path: "/dl/changes (1).md", tidy: { dir: ".tazuna/unapplied", afterSec: 15 }, rootOption: null };
 
   it("失敗はレポートを貼るよう促し、コピーできなかったときはそう書く", () => {
     const copied = describeWatchResult({ kind: "failed", files: 0, reportCopied: true }, file);
@@ -334,15 +388,52 @@ describe("describeWatchResult (§4.7 結果の知らせ方)", () => {
     expect(notCopied.headline).not.toContain("コピー済み");
   });
 
-  it("移せなかったときは元の場所に残っていると書く", () => {
-    const r = describeWatchResult(
-      { kind: "already-applied", files: 0, reportCopied: false },
-      { ...file, moveError: "EBUSY" },
-    );
-    expect(r.details.join("\n")).toContain("/dl/changes (1).md に残っています");
-  });
-
   it("適用はファイル数をタイトルに入れる", () => {
     expect(describeWatchResult({ kind: "applied", files: 3, reportCopied: false }, file).title).toBe("✓ 適用 3 ファイル");
   });
+
+  it("後で移すものはその先と猶予を書く", () => {
+    const r = describeWatchResult({ kind: "already-applied", files: 0, reportCopied: false }, file);
+    expect(r.details).toEqual(["changes.md は 15 秒後に .tazuna/unapplied へ移します"]);
+  });
+
+  it("二重適用: 移すものは当て直すコマンドを移したときに示し、移さないもの (プロジェクト直下) はすぐ示す", () => {
+    const later = describeWatchResult({ kind: "duplicate", files: 0, reportCopied: false }, file);
+    expect(later.details.join("\n")).not.toContain("--force");
+    const now = describeWatchResult({ kind: "duplicate", files: 0, reportCopied: false }, { ...file, tidy: null });
+    expect(now.details.join("\n")).toContain('tazuna "/dl/changes (1).md" --force');
+  });
+
+  it("--root 付きで始めた watch は、案内するコマンドにも --root を付ける", () => {
+    const withRoot = { ...file, tidy: null, rootOption: "/work/repo" };
+    const dup = describeWatchResult({ kind: "duplicate", files: 0, reportCopied: false }, withRoot);
+    expect(dup.details.join("\n")).toContain('tazuna "/dl/changes (1).md" --force --root "/work/repo"');
+    const other = describeWatchResult({ kind: "other-repo", files: 0, reportCopied: false }, withRoot);
+    expect(other.details.join("\n")).toContain('tazuna "/dl/changes (1).md" --root "/work/repo" で');
+    const plain = describeWatchResult({ kind: "other-repo", files: 0, reportCopied: false }, file);
+    expect(plain.details.join("\n")).not.toContain("--root");
+  });
+
+  it("適用の途中の例外は「読めませんでした」とせず、git diff の確認を促す", () => {
+    const r = describeWatchResult({ kind: "error", files: 0, reportCopied: false }, file);
+    expect(r.headline).toContain("途中でエラー");
+    expect(r.headline).not.toContain("読めませんでした");
+    expect(r.details.join("\n")).toContain("git diff");
+  });
+});
+
+describe("describeTidy (§4.7 猶予の後の片付け)", () => {
+  it("移した先を書き、二重適用なら移した先のパスで当て直すコマンドを示す", () => {
+    const moved = { path: "/dl/changes.md", movedTo: "/r/.tazuna/unapplied/x_changes.md", moveError: null, rootOption: null };
+    expect(describeTidy("failed", moved)).toEqual(["changes.md を /r/.tazuna/unapplied/x_changes.md へ移しました"]);
+    expect(describeTidy("duplicate", moved)[1]).toContain('tazuna "/r/.tazuna/unapplied/x_changes.md" --force');
+  });
+
+  it("移せなかったときは元の場所に残っていると書き、コマンドは元のパスで示す", () => {
+    const failed = { path: "/dl/changes (1).md", movedTo: null, moveError: "EBUSY", rootOption: "/r" };
+    const lines = describeTidy("duplicate", failed);
+    expect(lines[0]).toContain("/dl/changes (1).md に残っています");
+    expect(lines[1]).toContain('tazuna "/dl/changes (1).md" --force --root "/r"');
+  });
+
 });
