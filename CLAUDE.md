@@ -328,7 +328,7 @@ npm の tazuna は 2026-11-01 時点で空き。
   ①**結果の知らせ**: apply の本体を `runApply` (結果の種類 ApplyOutcomeKind・書いたファイル数・レポートを
   コピーしたか を返す) にし、`applyCommand` はその終了コードを返すだけ。watch は結果ごとにターミナルのタイトル
   (term.ts の setTerminalTitle。Windows は process.title = コンソールのタイトル、ほかは OSC 0 + XTWINOPS 22/23 で
-  退避・復元。非 TTY では何もしない)・ベル (ringBell。`--no-bell`)・強調表示の結果の行 (describeWatchResult。純粋関数)
+  退避・復元。非 TTY では何もしない)・ベル (ringBell。`--bell` のときだけ。既定で鳴らすのは利用者が要らないと判断)・強調表示の結果の行 (describeWatchResult。純粋関数)
   を出す。通知の外部コマンド (トースト) は使わない (審査の説明が増えるのと、実機で確かめられないため)
   ②**当てなかった changes.md の片付け** (infra/unapplied.ts): Downloads 由来で failed / already-applied / duplicate の
   ものを状態ディレクトリの unapplied/ へ `YYYY-MM-DD_HHmmss_<元の名前>` で移す (rename、別ドライブなら写して元を消す。
@@ -591,7 +591,7 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   2026-11-03 公開 /
   v0.21.0: 2026-11-03 手順文 v12 (docs/db/schema.md が ashiato schema --data の出力なら、データの姿を先に使わせ、
   同じことを確かめる SQL を出させない。ashiato 0.3.0 と組む)。2026-11-03 公開 /
-  v0.22.0: 2026-11-04 watch の往復を楽にする (結果をタイトル・ベル・結果の行で知らせる、当てなかった Downloads の
+  v0.22.0: 2026-11-04 watch の往復を楽にする (結果をタイトルと結果の行で知らせる (ベルは --bell)、当てなかった Downloads の
   changes.md を unapplied/ へ片付ける、別のリポジトリ向けらしいものを当てない)。
   リポジトリ: https://github.com/ishibashi0112/tazuna (旧 https://github.com/ishibashi0112/petari。GitHub が転送する)
   リリース手順: version を上げて `pnpm publish` (`prepublishOnly` が typecheck → test → build を実行。認証はユーザー)

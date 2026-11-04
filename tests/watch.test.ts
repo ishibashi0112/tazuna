@@ -289,6 +289,29 @@ describe("watchCommand (§4.7)", () => {
     expect(unapplied(dir)).toHaveLength(1);
   });
 
+  it("ベルは --bell のときだけ鳴らす (既定は鳴らさない)", async () => {
+    const tty = process.stdout.isTTY;
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+    try {
+      for (const args of [[], ["--bell"]]) {
+        output.length = 0;
+        const { dir, downloads } = setup();
+        const ac = new AbortController();
+        const running = watchCommand(["--root", dir, ...args], { signal: ac.signal, intervalMs: 10 });
+        await waitFor(() => output.join("").includes("到着を待っています"), "start");
+        writeFileSync(join(downloads, "changes.md"), CHANGES, "utf8");
+        await waitFor(() => output.join("").includes("引き続き待っています"), "applied");
+        ac.abort();
+        expect(await running).toBe(0);
+        // ベルは BEL 1 文字だけの書き込み (タイトルの終端の BEL とは別)
+        expect(output.filter((chunk) => chunk === "\u0007")).toHaveLength(args.length);
+        expect(output.join("")).toContain("tazuna watch: ✓ 適用 1 ファイル");
+      }
+    } finally {
+      Object.defineProperty(process.stdout, "isTTY", { value: tty, configurable: true });
+    }
+  });
+
   it("プロジェクト直下の CHANGES.md (変更履歴) は当てない", async () => {
     const { dir } = setup();
     const w = await start(dir);

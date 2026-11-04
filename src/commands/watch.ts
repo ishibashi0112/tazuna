@@ -2,7 +2,7 @@
  * tazuna watch — Downloads とプロジェクト直下を監視し、届いた changes*.md を自動で適用する (§4.7)。
  * 新着 1 件ごとに runApply へ確認なしで渡す。検証・失敗レポートの自動コピー・
  * 二重適用の防止・成功後の履歴への移動は `tazuna` (引数なし) と同じ。Ctrl+C で終了する。
- * 結果はターミナルのタイトルとベルでも知らせ (ブラウザから戻らずに分かるように)、
+ * 結果はターミナルのタイトルでも知らせ (--bell でベルも。既定は鳴らさない)、
  * 当てなかった Downloads の changes.md は状態ディレクトリの unapplied/ へ移す。
  */
 import { existsSync, readFileSync } from "node:fs";
@@ -115,8 +115,8 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
       root: { type: "string" },
       "dry-run": { type: "boolean", default: false },
       "no-vbproj": { type: "boolean", default: false },
-      // 結果のベルを鳴らさない (タイトルと結果の行は出す)
-      "no-bell": { type: "boolean", default: false },
+      // 結果ごとにベルも鳴らす (既定は鳴らさない。職場で毎回音が鳴るのを避けるため)
+      bell: { type: "boolean", default: false },
     },
     allowPositionals: false,
   });
@@ -161,7 +161,7 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
       out(`  (既にある ${state.settled.size} 件は対象外です。それを当てるときは ${TOOL_NAME} を実行してください)`);
     }
     out(
-      `  結果はこのターミナルのタイトル${values["no-bell"] ? "" : "とベル"}でも知らせます。` +
+      `  結果はこのターミナルのタイトル${values.bell ? "とベル" : ""}でも知らせます。` +
         `当てなかった Downloads の changes.md は ${relative(root, unappliedDir(root))} へ移します`,
     );
     title("待機中");
@@ -222,7 +222,7 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
         outEmphasis(report.headline);
         for (const line of report.details) out(`  ${line}`);
         title(`${report.title} (${clock(new Date()).slice(0, 5)})`);
-        if (!values["no-bell"]) ringBell();
+        if (values.bell) ringBell();
         out("");
         out("引き続き待っています (Ctrl+C で終了)");
       }
