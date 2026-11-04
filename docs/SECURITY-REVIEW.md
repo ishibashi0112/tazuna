@@ -4,7 +4,7 @@
 コマンドラインツール tazuna の導入審査用の資料です。
 どのデータがどこへ出るか、ツールが何をして何をしないかを、コードで確かめられる形でまとめます。
 
-- 対象: tazuna 0.21.0(2026-11-03 時点)
+- 対象: tazuna 0.22.0(2026-11-04 時点)
 - ソース: <https://github.com/ishibashi0112/tazuna>
 - ライセンス: MIT
 - 以前の slnmix(パックを作る側)と petari(変更を当てる側)は、0.15.0 で 1 つのパッケージにまとめ、tazuna に
@@ -275,7 +275,12 @@ tazuna は changes.md の内容を**実行しません**。テキストとして
 
 `tazuna watch` は、ダウンロードされた changes.md を確認なしで当てる常駐モードです。
 上の検証はすべて同じように効きます。書き込みはプロジェクトのフォルダ内に限られ、
-`tazuna undo` で戻せます。
+`tazuna undo` で戻せます。当てなかった changes.md(失敗した・適用済みだった)は 15 秒待ってから Downloads から
+プロジェクトの `.tazuna/unapplied/` へ移します(Downloads のほかのファイルには触れません。移し先がプロジェクトの外を
+指す symlink なら移しません)。
+結果はターミナルのタイトルでも知らせます(`--bell` のときはベルも。タイトルの文字列から制御文字を取り除き、端末へ送る
+制御シーケンスはツールに書かれた固定のものだけ。通知のための外部コマンドは使いません)。
+対象のファイルがこのリポジトリに無い changes.md は、別のリポジトリ向けとみなして当てません。
 
 **AI が書いたコードが PC 上で動くのは、利用者がビルド・テストを実行したとき**です
 (`tazuna build` もビルドを実行します)。.vbproj のビルドイベントのように、プロジェクトの
@@ -292,7 +297,7 @@ PowerShell に渡すパスは単一引用符でエスケープしています。
 |---|---|---|
 | `powershell`(Set-Clipboard)/ `pbcopy` / `xclip` | `tazuna pack` の最後、`tazuna build` の失敗時、適用の失敗時 | 貼るもの・エラーの文面・失敗レポートをクリップボードへ入れる(`--no-clip` と設定で止まる) |
 | `powershell`(Get-Clipboard)/ `pbpaste` / `xclip` | `tazuna --clip` のときだけ | changes.md をクリップボードから読む |
-| `git ls-files` | `tazuna pack` で、VB.NET 以外の構成に `extraRoots` を書いていないとき | パックに入れるファイルの一覧を得る(読み取りだけ) |
+| `git ls-files` | `tazuna pack` で、VB.NET 以外の構成に `extraRoots` を書いていないとき。適用で、changes.md の対象のファイルがどれもプロジェクトに無いとき | パックに入れるファイルの一覧を得る。適用では、同じ名前のファイルがあるかで別のリポジトリ向けの changes.md かを見分ける(読み取りだけ) |
 | `git status --porcelain` | 適用の前 | 未コミットの変更があれば警告する |
 | `vswhere.exe` / `MSBuild.exe` | `tazuna build` のときだけ | Visual Studio に付属する MSBuild を探してビルドする(`--msbuild` で場所を指定できる) |
 | `reg query` | 引数なしの `tazuna` / `tazuna watch` | ダウンロードフォルダの場所を調べる(OneDrive へのリダイレクト対応) |
@@ -309,6 +314,7 @@ PowerShell の実行が制限されている環境では、クリップボード
 | `repomix-output.xml` / `repomix-output.prompt.md` | パック(コードを含む)と指示文 | プロジェクト直下。`tazuna init` が `.gitignore` に追加する |
 | `tazuna.config.json` / `docs/` | プロジェクトの設定と設計書などのひな型 | `tazuna init` が作る。git にコミットする前提 |
 | `.tazuna/config.json` / `.tazuna/history/` | PC ごとの設定、書き換え前後のファイルと changes.md の原本 | プロジェクト直下(以前の petari を使っていたリポジトリでは `.petari/` をそのまま使う)。`tazuna init` が `.gitignore` に追加し、パックにも入れない。履歴の件数の上限は設定(`historyLimit`)で決められる |
+| `.tazuna/unapplied/` | `tazuna watch` が当てなかった changes.md(失敗した・適用済みだった・二重適用の防止で止めた) | Downloads から移したもの。`.tazuna/` の中なので `.gitignore` とパックの扱いは履歴と同じ。自動では消さない |
 | 一時ファイル | Windows でクリップボードへ渡すためのテキスト、`tazuna build` のエラーのログ | `%TEMP%` に作り、使い終わったらすぐ削除する |
 | 一時ファイル | ブラウザ表示用の差分レポート(HTML) | `%TEMP%` に作り、次の `tazuna show` の実行時に 1 時間より古いものを削除する |
 

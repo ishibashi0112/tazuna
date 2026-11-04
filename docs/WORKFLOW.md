@@ -34,7 +34,8 @@
 毎回       npx tazuna pack            → 貼るものがクリップボードに入る
            Copilot Chat: 本文に貼って送信 (パックが大きいときだけ .xml も添付。
                          どちらかは実行末尾の 1 行に出る)
-           AI の changes.md をダウンロード → watch が自動で適用
+           AI の changes.md をダウンロード → watch が自動で適用し、結果を
+                                       ターミナルのタイトルで知らせる
                                        (watch を使わないときは npx tazuna)
            npx tazuna build           → 失敗ならエラーと周辺のコードがクリップボードに入る
                                          → チャットに貼る
@@ -50,6 +51,12 @@
 設計から始めるか、実装の続きか、引継ぎ書を書くかは tazuna と AI が決めます。
 あなたが打つコマンドは `npx tazuna pack` と `npx tazuna` (テストがあれば `pnpm test:all`) だけです。
 `npx tazuna watch` を起動しておけば、毎回の `npx tazuna` も要りません。
+結果はターミナルのタイトル (タブ・タスクバー) でも知らせるので、ターミナルを開かなくても
+「適用した」か「失敗レポートがクリップボードに入った」かが分かります (`--bell` を付けると音も鳴らします)。
+当てなかった changes.md (失敗した・適用済みだった) は 15 秒ほど待ってから Downloads から
+`.tazuna/unapplied/` へ移すので、Downloads に溜まりません (待つのは、同じ Downloads を見ている別のリポジトリの
+watch が先に当てられるようにするためです)。watch は起動したリポジトリだけに当てます。別のリポジトリ向けらしい changes.md
+(対象のファイルがこのリポジトリに無い) は当てずに Downloads に残します。
 watch はブラウザのダウンロード先とコードが同じ PC にあるときに使えます。リモート
 デスクトップ越しに changes.md を受け渡す運用では、従来どおり `npx tazuna` / `npx tazuna --clip` です。
 web と dotnet を分けたアプリ (webview2-bridge の雛形。`.sln` は `dotnet/` の下) でも同じです。
@@ -200,8 +207,9 @@ docs/ と設定ファイル (`tazuna.config.json`。作られていれば) は g
 ### 3-6. tazuna が失敗したとき
 
 失敗レポートは既定でクリップボードにコピーされます。そのままチャットに貼れば AI が
-修正版の changes.md を返します。watch はその修正版 (`changes (1).md` などの連番付きで
-保存されます) を自動で当てます。失敗した changes.md は当て直しません。2 回続けて失敗したら、AI が見ているパックと手元の
+修正版の changes.md を返します。watch はその修正版を自動で当てます。失敗した changes.md は
+当て直さず、15 秒ほどで Downloads から `.tazuna/unapplied/` へ移します (修正版も `changes.md` の名前で保存されます)。
+2 回続けて失敗したら、AI が見ているパックと手元の
 コードがずれています。`npx tazuna pack` でパックを作り直し、新しいチャットで始めてください
 (引継ぎ推奨が出ます)。
 
