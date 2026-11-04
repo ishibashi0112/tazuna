@@ -1,14 +1,14 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyCommand } from "../src/commands/apply.ts";
 import { invalidVscodeCommandReason, showCommand } from "../src/commands/show.ts";
 import { undoCommand } from "../src/commands/undo.ts";
 import { invalidPathReason } from "../src/core/applier.ts";
 import { isInsideRoot } from "../src/infra/files.ts";
 import { listHistoryIds, readManifest, type Manifest } from "../src/infra/history.ts";
-import { sanitizeForTerminal } from "../src/infra/term.ts";
+import { restoreTerminalTitle, ringBell, sanitizeForTerminal, setTerminalTitle } from "../src/infra/term.ts";
 
 const doc = (...lines: string[]): string => lines.join("\n");
 
@@ -195,5 +195,52 @@ describe("config の実行時検証 (指摘 5 追補)", () => {
       "utf8",
     );
     expect(loadConfig(root).newFile).toEqual({ encoding: "utf8", eol: "crlf" });
+  });
+});
+
+describe("ターミナルのタイトルとベル (tazuna watch の結果の知らせ)", () => {
+  const writes: string[] = [];
+  const tty = process.stdout.isTTY;
+  const title = process.title;
+  beforeEach(() => {
+    writes.length = 0;
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    });
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Object.defineProperty(process.stdout, "isTTY", { value: tty, configurable: true });
+    process.title = title;
+  });
+
+  it("タイトルの本文の制御文字は取り除き、シーケンスはリテラルだけ。復元は退避した状態へ戻す", () => {
+    setTerminalTitle("a\u001b]0;evil\u0007b\nc", "linux");
+    restoreTerminalTitle();
+    expect(writes).toEqual(["\u001b[22;0t", "\u001b]0;a]0;evilb c\u0007", "\u001b]0;\u0007\u001b[23;0t"]);
+  });
+
+  it("Windows はコンソールのタイトル (process.title) を変え、終わったら元に戻す", () => {
+    const before = process.title;
+    setTerminalTitle("tazuna watch: 待機中", "win32");
+    expect(process.title).toBe("tazuna watch: 待機中");
+    restoreTerminalTitle();
+    expect(process.title).toBe(before);
+    expect(writes).toEqual([]);
+  });
+
+  it("非 TTY (パイプ・リダイレクト) では何も書かない", () => {
+    Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
+    setTerminalTitle("x", "linux");
+    ringBell();
+    restoreTerminalTitle();
+    expect(writes).toEqual([]);
+  });
+
+  it("ベルは BEL 1 文字", () => {
+    ringBell();
+    expect(writes).toEqual(["\u0007"]);
   });
 });

@@ -16,6 +16,7 @@ import {
   type Plan,
 } from "../core/applier.ts";
 import { changeSetFingerprint } from "../core/fingerprint.ts";
+import { fileNameKey, looksLikeOtherRepository } from "../core/other-repo.ts";
 import { PRESENCE_STAGE_LABEL } from "../core/matcher.ts";
 import { fixedNewFile, resolveNewFileStyle } from "../core/new-file-style.ts";
 import { parseChangesRecovering } from "../core/parser.ts";
@@ -35,7 +36,7 @@ import {
 } from "../infra/downloads.ts";
 import { deleteFile, isInsideRoot, readFileState, sha256, writeBytes } from "../infra/files.ts";
 import { stateDir } from "../infra/history.ts";
-import { gitDirtyFiles } from "../infra/git.ts";
+import { gitDirtyFiles, listGitFiles } from "../infra/git.ts";
 import { collectStyleSampleGroups } from "../infra/new-file-style.ts";
 import { err, out, outEmphasis } from "../infra/term.ts";
 import {
@@ -109,7 +110,45 @@ export interface DetectedChanges {
   origin: "downloads" | "project-root";
 }
 
+/**
+ * 適用 1 回の結果の種類 (tazuna watch が結果の通知と changes.md の片付けに使う・§4.7)
+ * - applied: 書き込んだ / already-applied: すべて適用済みで書き込みなし / failed: 構文エラー・検証の失敗で何も書かない /
+ *   duplicate: 適用済みの changes.md で、なお書き込みが起きるため止めた / other-repo: 別のリポジトリ向けらしく当てなかった
+ *   (watch のみ) / dry-run / aborted: 確認で中止 / unreadable: 入力を読めない・見つからない
+ */
+export type ApplyOutcomeKind =
+  | "applied"
+  | "already-applied"
+  | "failed"
+  | "duplicate"
+  | "other-repo"
+  | "dry-run"
+  | "aborted"
+  | "unreadable";
+
+export interface ApplyResult {
+  /** 終了コード */
+  code: number;
+  kind: ApplyOutcomeKind;
+  /** applied のとき書き込んだファイル数 (.vbproj への登録を除く) */
+  files: number;
+  /** 失敗レポートをクリップボードへコピーしたか */
+  reportCopied: boolean;
+}
+
 export async function applyCommand(argv: string[], detected?: DetectedChanges): Promise<number> {
+  return (await runApply(argv, detected)).code;
+}
+
+/** 適用の本体。applyCommand と tazuna watch が使う */
+export async function runApply(argv: string[], detected?: DetectedChanges): Promise<ApplyResult> {
+  let reportCopied = false;
+  const done = (kind: ApplyOutcomeKind, code: number, files = 0): ApplyResult => ({
+    code,
+    kind,
+    files,
+    reportCopied,
+  });
   const { values, positionals } = parseArgs({
     args: argv,
     options: {
@@ -142,6 +181,7 @@ export async function applyCommand(argv: string[], detected?: DetectedChanges): 
     if (values["clip-report"] || config.clipReportOnFailure) {
       try {
         await writeClipboard(report);
+        reportCopied = true;
         // 貼り返しを忘れないよう、コピー済みであることを最後に強調表示する
         const rule = "━".repeat(56);
         outEmphasis(rule);
@@ -165,7 +205,7 @@ export async function applyCommand(argv: string[], detected?: DetectedChanges): 
       changesText = stripBom(readFileSync(detected.path, "utf8"));
     } catch {
       err(`${TOOL_NAME}: ファイルを読めません: ${detected.path}`);
-      return 1;
+      return done("unreadable", 1);
     }
     source = { type: detected.origin, path: detected.path };
   } else if (inputPath !== undefined) {
@@ -174,7 +214,7 @@ export async function applyCommand(argv: string[], detected?: DetectedChanges): 
       changesText = stripBom(readFileSync(abs, "utf8"));
     } catch {
       err(`${TOOL_NAME}: ファイルを読めません: ${abs}`);
-      return 1;
+      return done("unreadable", 1);
     }
     source = { type: "file", path: abs };
   } else if (values.clip) {
@@ -182,11 +222,11 @@ export async function applyCommand(argv: string[], detected?: DetectedChanges): 
       changesText = stripBom(await readClipboard());
     } catch (e) {
       err(`${TOOL_NAME}: クリップボードを読めません: ${e instanceof Error ? e.message : String(e)}`);
-      return 1;
+      return done("unreadable", 1);
     }
     if (changesText.trim() === "") {
       err(`${TOOL_NAME}: クリップボードが空です`);
-      return 1;
+      return done("unreadable", 1);
     }
     source = { type: "clipboard" };
   } else {
@@ -204,7 +244,7 @@ export async function applyCommand(argv: string[], detected?: DetectedChanges): 
     if (candidates.length === 0) {
       err(`${TOOL_NAME}: ${downloadsDir} にもプロジェクト直下にも直近 30 分以内の changes*.md が見つかりません`);
       err("  ファイルパスを指定するか、--clip でクリップボードから読み込んでください");
-      return 1;
+      return done("unreadable", 1);
     }
     const newest = candidates[0] as (typeof candidates)[number];
     out(`${newest.origin === "downloads" ? "Downloads" : "プロジェクト直下"}から検出: ${newest.path}`);
@@ -213,14 +253,14 @@ export async function applyCommand(argv: string[], detected?: DetectedChanges): 
       for (const c of candidates.slice(1)) out(`    - ${c.path}`);
       if (!values.yes && !(await confirm("このファイルを適用しますか?"))) {
         out("中止しました。");
-        return 1;
+        return done("aborted", 1);
       }
     }
     try {
       changesText = stripBom(readFileSync(newest.path, "utf8"));
     } catch {
       err(`${TOOL_NAME}: ファイルを読めません: ${newest.path}`);
-      return 1;
+      return done("unreadable", 1);
     }
     source = { type: newest.origin, path: newest.path };
   }
@@ -230,7 +270,7 @@ export async function applyCommand(argv: string[], detected?: DetectedChanges): 
   if (issues.length > 0) {
     err(`${TOOL_NAME}: changes.md の構文エラーです。何も書き込んでいません。\n`);
     await emitReport(buildParseErrorReport(issues));
-    return 1;
+    return done("failed", 1);
   }
   if (repairs.length > 0) {
     out(`規約からの軽微な逸脱 ${repairs.length} 件を自動補正して解釈しました:`);
@@ -309,15 +349,36 @@ export async function applyCommand(argv: string[], detected?: DetectedChanges): 
     }
   };
 
+  // 対象のファイルがどれもこのリポジトリに無い = 別のリポジトリ向けらしい (§4.7)。watch では当てずに残し
+  // (失敗レポートでクリップボードを上書きしない。正しいリポジトリの watch が当てる)、手で実行したときは注記する
+  const otherRepository =
+    !plan.ok &&
+    looksLikeOtherRepository(
+      changeSet.files,
+      (path) => states.get(path)?.exists === true,
+      // 失敗が「対象のファイルが無い」だけのときに限る (パスの誤り・symlink などはレポートが要る)
+      plan.failures.length > 0 && plan.failures.every((f) => f.kind === "target-missing")
+        ? repositoryFileNames(root)
+        : null,
+    );
+  if (otherRepository && detected !== undefined) {
+    out(`changes.md の対象 (どれもこのリポジトリ ${root} にありません):`);
+    for (const f of changeSet.files) out(`  ${f.op.padEnd(7)} ${f.path}`);
+    return done("other-repo", 1);
+  }
+
   // 3. 失敗があれば何も書き込まずレポート (§4.1, §7)
   if (!plan.ok && !values.partial) {
     err(`${TOOL_NAME}: 検証に失敗しました (${plan.failures.length} 件)。何も書き込んでいません。\n`);
+    if (otherRepository) {
+      err(`注: 対象のファイルがどれもこのリポジトリ (${root}) にありません。別のリポジトリ向けの changes.md ではないか確認してください\n`);
+    }
     if (previousNote !== null) err(`注: ${previousNote}。取り違えていないか確認してください\n`);
     literalHint();
     await emitReport(
       buildFailureReport(plan.failures, { outcomes: plan.outcomes, nothingWritten: true }),
     );
-    return 1;
+    return done("failed", 1);
   }
   const applicable = plan.outcomes.filter(isApplicable);
   // create した .vb / .cs の旧スタイル .vbproj / .csproj への登録計画 (設計書 §11.1)。失敗しても create は成功扱い
@@ -338,14 +399,14 @@ export async function applyCommand(argv: string[], detected?: DetectedChanges): 
       out("すべての変更は適用済みです。書き込みは行いませんでした。");
       if (previousNote !== null) out(`  (${previousNote})`);
       for (const o of plan.outcomes) out(`  ${opLabel(o)}`);
-      return 0;
+      return done("already-applied", 0);
     }
     err(`${TOOL_NAME}: 適用できる変更がありません。\n`);
     literalHint();
     await emitReport(
       buildFailureReport(plan.failures, { outcomes: plan.outcomes, nothingWritten: true }),
     );
-    return 1;
+    return done("failed", 1);
   }
   // 適用済みの changes.md で、なお書き込みが発生する = 二重適用のおそれ。--force なしでは止める
   if (previousNote !== null) {
@@ -357,9 +418,12 @@ export async function applyCommand(argv: string[], detected?: DetectedChanges): 
       err(`${TOOL_NAME}: ${previousNote}。何も書き込んでいません。`);
       err("  このまま適用すると次のファイルに書き込みが発生します (二重適用のおそれ):");
       for (const o of applicable) err(`    ${opLabel(o)}`);
-      err("  取り違えでなければ --force を付けて再実行してください");
-      err(`  (${TOOL_NAME} undo で巻き戻した履歴は対象外です。git 等で手動で戻した場合は --force が必要です)`);
-      return 1;
+      // tazuna watch は当て直すコマンドを結果の行で示す (移した先のパスで)
+      if (detected === undefined) {
+        err("  取り違えでなければ --force を付けて再実行してください");
+        err(`  (${TOOL_NAME} undo で巻き戻した履歴は対象外です。git 等で手動で戻した場合は --force が必要です)`);
+      }
+      return done("duplicate", 1);
     }
   }
   if (values["dry-run"]) {
@@ -379,7 +443,7 @@ export async function applyCommand(argv: string[], detected?: DetectedChanges): 
         buildFailureReport(plan.failures, { outcomes: plan.outcomes, nothingWritten: true }),
       );
     }
-    return 0;
+    return done("dry-run", 0);
   }
 
   // 確認 (§4.1, §9)
@@ -398,7 +462,7 @@ export async function applyCommand(argv: string[], detected?: DetectedChanges): 
   if (!values.yes) {
     if (!(await confirm("適用しますか?"))) {
       out("中止しました。");
-      return 1;
+      return done("aborted", 1);
     }
   }
 
@@ -519,5 +583,12 @@ export async function applyCommand(argv: string[], detected?: DetectedChanges): 
 
   out("");
   out(`git diff で差分を確認してください。巻き戻しは \`${TOOL_NAME} undo\` です。`);
-  return 0;
+  return done("applied", 0, applicable.length);
+}
+
+/** リポジトリのファイル名 (小文字) の集合。git のリポジトリでなければ null (別のリポジトリ向けの判定をしない) */
+function repositoryFileNames(root: string): Set<string> | null {
+  const listed = listGitFiles(root);
+  if (!listed.ok) return null;
+  return new Set(listed.files.map(fileNameKey));
 }

@@ -2,7 +2,6 @@
  * pack / build / init が共有するファイル I/O と、入力(.sln / .vbproj / .csproj / generic 構成)とルートの決め方。
  * src/pack/ の解析コアは deps 注入で I/O を持たないため、実際のファイルシステムをここでつなぐ。
  */
-import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { LEGACY_STATE_DIRECTORY, STATE_DIRECTORY } from "../brand.ts";
@@ -14,6 +13,7 @@ import { configFileNameIn, loadSlnmixConfig, readConfigFile, describeConfigConfl
 import { describeRootReason, resolveRoot } from "../pack/rootResolver.ts";
 import { resolveTarget } from "../pack/targetResolver.ts";
 import type { ParseDiagnostic } from "../pack/types.ts";
+import { listGitFiles } from "../infra/git.ts";
 import { err } from "../infra/term.ts";
 
 export interface FsDeps {
@@ -73,30 +73,7 @@ export function fileSizeOf(absolutePath: string): number | undefined {
   }
 }
 
-/**
- * git が管理しているファイル(追跡中 + .gitignore に一致しない未追跡)のルート相対パス(`/` 区切り)。
- * `git ls-files` はカレント配下だけを、カレントからの相対で返すので、ルートで実行する。
- * 子プロセスは配列引数(シェル非経由)。
- */
-export function listGitFiles(rootDir: string): { ok: true; files: string[] } | { ok: false; message: string } {
-  const result = spawnSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
-    cwd: rootDir,
-    maxBuffer: 256 * 1024 * 1024,
-    windowsHide: true,
-    timeout: 60_000,
-  });
-  if (result.error !== undefined) {
-    const code = (result.error as NodeJS.ErrnoException).code;
-    return { ok: false, message: code === "ENOENT" ? "git が見つかりません" : result.error.message };
-  }
-  if (result.status !== 0) {
-    const detail = result.stderr.toString("utf8").trim().split(/\r?\n/)[0] ?? "";
-    return { ok: false, message: detail === "" ? `git ls-files が終了コード ${result.status ?? "不明"} で終了しました` : detail };
-  }
-  // 競合中のファイルは段ごとに並ぶので重ねない
-  const files = [...new Set(result.stdout.toString("utf8").split("\0").filter((p) => p !== ""))];
-  return { ok: true, files };
-}
+export { listGitFiles };
 
 /**
  * git の一覧から、パック自身の出力(ownOutputs。絶対パス)と、適用の履歴・PC ごとの設定(.tazuna/・

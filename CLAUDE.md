@@ -324,6 +324,21 @@ npm の tazuna は 2026-11-01 時点で空き。
   見出しの無いファイル (直下の変更履歴 CHANGES.md 等) は当てない (hasChangesHeading)。
   `--partial` / `--force` は受け付けない (確認なしの部分適用・再適用をしない)。
   SIGINT は once で受けて現在の適用の完了後に抜ける (2 回目の Ctrl+C は即終了)
+- watch の往復を楽にする (v0.22.0 / 2026-11-04、利用者が全体の改善案から選んだ):
+  ①**結果の知らせ**: apply の本体を `runApply` (結果の種類 ApplyOutcomeKind・書いたファイル数・レポートを
+  コピーしたか を返す) にし、`applyCommand` はその終了コードを返すだけ。watch は結果ごとにターミナルのタイトル
+  (term.ts の setTerminalTitle。Windows は process.title = コンソールのタイトル、ほかは OSC 0 + XTWINOPS 22/23 で
+  退避・復元。非 TTY では何もしない)・ベル (ringBell。`--no-bell`)・強調表示の結果の行 (describeWatchResult。純粋関数)
+  を出す。通知の外部コマンド (トースト) は使わない (審査の説明が増えるのと、実機で確かめられないため)
+  ②**当てなかった changes.md の片付け** (infra/unapplied.ts): Downloads 由来で failed / already-applied / duplicate の
+  ものを状態ディレクトリの unapplied/ へ `YYYY-MM-DD_HHmmss_<元の名前>` で移す (rename、別ドライブなら写して元を消す。
+  消せなければ写しを消して残す)。プロジェクト直下のものは動かさない (手で直しながら保存のたびに当て直す使い方を残す)。
+  --dry-run では動かさない。二重適用で止めたときの「--force を付けて再実行」は watch では出さず、移した先のパスで
+  コマンドを示す ③**別のリポジトリ向けらしい changes.md** (core/other-repo.ts の looksLikeOtherRepository): 検証の
+  失敗が target-missing だけ、replace / rewrite が 1 つ以上、挙げたファイルがルートに 1 つも無く、replace / rewrite の
+  対象と同じ名前のファイルが git の一覧 (infra/git.ts の listGitFiles。pack-io.ts から移した) に無いときだけ。watch は
+  当てずレポートも出さず (クリップボードを上書きしない) Downloads に残す (kind "other-repo")。手で実行した tazuna は
+  注記してから従来どおりレポートする。同じ名前があればフォルダの書き違いとみなす。create だけのものは見分けない
 
 ### 伏せ字 [MASKED] の扱い (2026-10-31, v0.14.0)
 
@@ -508,7 +523,8 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
 - 端末出力は `src/infra/term.ts` の `out`/`err` を必ず使う (C0/C1 制御文字を除去。
   ANSI エスケープ注入対策)。`process.stdout.write` 直書きは protocol (信頼済み同梱テキスト) のみ可。
   強調表示は同ファイルの `outEmphasis` (本文サニタイズ後に term.ts 内のリテラル定数の
-  装飾コードだけを付与。非 TTY / NO_COLOR では装飾なし) — 注入対策は保たれる
+  装飾コードだけを付与。非 TTY / NO_COLOR では装飾なし) — 注入対策は保たれる。
+  ターミナルのタイトル (`setTerminalTitle`) とベル (`ringBell`) も同じ方式 (シーケンスはリテラル定数、本文はサニタイズ後)
 - 子プロセスは常に execFile/spawn の配列引数 (シェル非経由)。PowerShell へ渡すパスは
   単一引用符 + `''` エスケープ
 - 再監査 (2 回目) での追加: vscodeCommand の UNC 拒否 / 予約名判定は末尾ドット・空白を
@@ -574,7 +590,9 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   ConvertTo-SecureString・Invoke-Sqlcmd・sqlcmd /P・net.exe use)・Gradle・<param>・Settings.Designer.cs の伏せ方。
   2026-11-03 公開 /
   v0.21.0: 2026-11-03 手順文 v12 (docs/db/schema.md が ashiato schema --data の出力なら、データの姿を先に使わせ、
-  同じことを確かめる SQL を出させない。ashiato 0.3.0 と組む)。
+  同じことを確かめる SQL を出させない。ashiato 0.3.0 と組む)。2026-11-03 公開 /
+  v0.22.0: 2026-11-04 watch の往復を楽にする (結果をタイトル・ベル・結果の行で知らせる、当てなかった Downloads の
+  changes.md を unapplied/ へ片付ける、別のリポジトリ向けらしいものを当てない)。
   リポジトリ: https://github.com/ishibashi0112/tazuna (旧 https://github.com/ishibashi0112/petari。GitHub が転送する)
   リリース手順: version を上げて `pnpm publish` (`prepublishOnly` が typecheck → test → build を実行。認証はユーザー)
 - **publish 事故と再発防止 (2026-09-14)**: v0.9.0 は `package.json` の version だけ 0.9.0 で、
