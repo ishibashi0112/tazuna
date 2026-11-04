@@ -523,6 +523,11 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
 - 書き込み系は `isInsideRoot` (最も近い実在祖先ディレクトリの realpath がルート配下か) で
   **symlink ディレクトリ経由のルート外書き込みを拒否**。undo は対象が symlink 化されていても拒否
 - パス規則: 絶対パス・UNC・ドライブレター・`..`・`~`・`:` (ADS)・Windows 予約デバイス名を拒否
+- `.git` と状態ディレクトリ (`.tazuna` / `.petari`) の中への変更も拒否 (どの階層でも。大文字小文字・末尾のドットと
+  空白・HFS+ が無視する文字・8.3 の短い名前 `GIT~1` を同一視。manifest の `\` 区切りも区切りとして見る。v0.22.1)。2026-11-04 に、changes.md で `.git/config` に
+  `core.fsmonitor` を書くと次の適用の `git status` がそのコマンドを実行すること、`.git` の中の変更は git diff に出ないことを
+  再現した (watch は確認なし)。git は `-c core.fsmonitor=false` + `GIT_OPTIONAL_LOCKS=0` で呼ぶ (infra/git.ts。
+  `--no-optional-locks` は git 2.15 未満で使えないため環境変数)。git の子プロセスを足すときも同じ指定を使う
 - `vscodeCommand` はコマンド名か絶対パスのみ (相対パス拒否 — リポジトリ内スクリプトの実行防止)
 - 端末出力は `src/infra/term.ts` の `out`/`err` を必ず使う (C0/C1 制御文字を除去。
   ANSI エスケープ注入対策)。`process.stdout.write` 直書きは protocol (信頼済み同梱テキスト) のみ可。
@@ -596,7 +601,8 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   v0.21.0: 2026-11-03 手順文 v12 (docs/db/schema.md が ashiato schema --data の出力なら、データの姿を先に使わせ、
   同じことを確かめる SQL を出させない。ashiato 0.3.0 と組む)。2026-11-03 公開 /
   v0.22.0: 2026-11-04 watch の往復を楽にする (結果をタイトルと結果の行で知らせる (ベルは --bell)、当てなかった Downloads の
-  changes.md を unapplied/ へ片付ける、別のリポジトリ向けらしいものを当てない)。
+  changes.md を unapplied/ へ片付ける、別のリポジトリ向けらしいものを当てない)。2026-11-04 公開 /
+  v0.22.1: 2026-11-04 changes.md で .git と状態ディレクトリを変更させない + git を読み取りだけで呼ぶ (セキュリティ修正)。
   リポジトリ: https://github.com/ishibashi0112/tazuna (旧 https://github.com/ishibashi0112/petari。GitHub が転送する)
   リリース手順: version を上げて `pnpm publish` (`prepublishOnly` が typecheck → test → build を実行。認証はユーザー)
 - **publish 事故と再発防止 (2026-09-14)**: v0.9.0 は `package.json` の version だけ 0.9.0 で、

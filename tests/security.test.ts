@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,7 @@ import { invalidVscodeCommandReason, showCommand } from "../src/commands/show.ts
 import { undoCommand } from "../src/commands/undo.ts";
 import { invalidPathReason } from "../src/core/applier.ts";
 import { isInsideRoot } from "../src/infra/files.ts";
+import { gitDirtyFiles, listGitFiles } from "../src/infra/git.ts";
 import { listHistoryIds, readManifest, type Manifest } from "../src/infra/history.ts";
 import { restoreTerminalTitle, ringBell, sanitizeForTerminal, setTerminalTitle } from "../src/infra/term.ts";
 
@@ -43,6 +45,137 @@ describe("invalidPathReason: Windows 特殊パス (指摘 6)", () => {
     expect(invalidPathReason("src/con.")).not.toBeNull();
     expect(invalidPathReason("src/aux.txt ")).not.toBeNull();
     expect(invalidPathReason("nul...")).not.toBeNull();
+  });
+});
+
+describe("invalidPathReason: .git と状態ディレクトリ (2026-11-04)", () => {
+  it(".git の中・.git 自体を拒否する (どの階層でも、大文字小文字・末尾のドットと空白・短い名前も)", () => {
+    for (const p of [
+      ".git/config",
+      ".git/hooks/pre-commit",
+      ".git",
+      "sub/.git/config",
+      ".GIT/config",
+      ".Git/HEAD",
+      ".git./config",
+      ".git /config",
+      "GIT~1/config",
+      "git~2/hooks/post-checkout",
+      ".g‌it/config",
+      "﻿.git/config",
+      // manifest のパスはパーサーを通らないため `\` 区切りのこともある (Windows では区切りになる)
+      ".git\\config",
+      "sub\\.git\\hooks\\pre-commit",
+    ]) {
+      expect(invalidPathReason(p), p).toContain("'.git' の中は変更できません");
+    }
+  });
+  it("状態ディレクトリ (.tazuna / .petari) の中を拒否する", () => {
+    for (const p of [".tazuna/config.json", ".petari/history/x/manifest.json", "menu/.TAZUNA/config.json", "TAZUNA~1/config.json"]) {
+      expect(invalidPathReason(p), p).toContain("状態ディレクトリ");
+    }
+  });
+  it("`\\` 区切りの `..` も拒否する (manifest のパス)", () => {
+    expect(invalidPathReason("..\\evil.txt")).not.toBeNull();
+    expect(invalidPathReason("src\\..\\..\\evil.txt")).not.toBeNull();
+  });
+  it("git の関連ファイルなど、紛らわしいが正当な名前は許可する", () => {
+    for (const p of [
+      ".gitignore",
+      ".gitattributes",
+      ".gitmodules",
+      ".github/workflows/ci.yml",
+      "docs/.gitkeep",
+      "src/git/status.ts",
+      "src/.git-blame-ignore-revs",
+      "git~/x.ts",
+      ".tazuna.config.json",
+      "tazuna.config.json",
+      "src/petari/a.ts",
+    ]) {
+      expect(invalidPathReason(p), p).toBeNull();
+    }
+  });
+
+  it("apply は .git に書く changes.md を検証段階で失敗させ、何も書かない", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tazuna-sec-git-"));
+    mkdirSync(join(root, ".git"), { recursive: true });
+    writeFileSync(join(root, ".git", "config"), "[core]\n\tbare = false\n");
+    writeFileSync(join(root, "a.txt"), "hello\n");
+    mkdirSync(join(root, ".tazuna"), { recursive: true });
+    writeFileSync(join(root, ".tazuna", "config.json"), JSON.stringify({ clipReportOnFailure: false }), "utf8");
+    const changesPath = join(root, "changes.md");
+    writeFileSync(
+      changesPath,
+      doc(
+        "## CHANGES",
+        "概要",
+        "### FILE: a.txt (replace)",
+        "<<<<<<< SEARCH",
+        "hello",
+        "=======",
+        "goodbye",
+        ">>>>>>> REPLACE",
+        "### FILE: .git/config (replace)",
+        "<<<<<<< SEARCH",
+        "[core]",
+        "=======",
+        "[core]",
+        '\tfsmonitor = "touch pwned"',
+        ">>>>>>> REPLACE",
+        "### FILE: .git/hooks/pre-commit (create)",
+        "<<<<<<< CONTENT",
+        "#!/bin/sh",
+        ">>>>>>> END",
+      ),
+      "utf8",
+    );
+    // --partial でも .git の分は書かない (検証の失敗としてスキップされる)
+    expect(await applyCommand([changesPath, "--root", root, "--yes", "--partial"])).toBe(0);
+    expect(readFileSync(join(root, "a.txt"), "utf8")).toBe("goodbye\n");
+    expect(readFileSync(join(root, ".git", "config"), "utf8")).toBe("[core]\n\tbare = false\n");
+    expect(existsSync(join(root, ".git", "hooks", "pre-commit"))).toBe(false);
+  });
+
+  it("undo は .git を指す manifest で巻き戻さない", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tazuna-sec-git-undo-"));
+    writeFileSync(join(root, "a.txt"), "hello\n");
+    const changesPath = join(root, "changes.md");
+    writeFileSync(changesPath, simpleChanges("a.txt"), "utf8");
+    expect(await applyCommand([changesPath, "--root", root, "--yes"])).toBe(0);
+    const id = listHistoryIds(root)[0] as string;
+    const manifestPath = join(root, ".tazuna", "history", id, "manifest.json");
+    const manifest = readManifest(root, id) as Manifest;
+    (manifest.files[0] as { path: string }).path = ".git/config";
+    writeFileSync(manifestPath, JSON.stringify(manifest), "utf8");
+    // 巻き戻す材料 (before) もそろえておく (パスの検証が無ければ .git/config を書いてしまう状態)
+    mkdirSync(join(root, ".tazuna", "history", id, "before", ".git"), { recursive: true });
+    writeFileSync(join(root, ".tazuna", "history", id, "before", ".git", "config"), "[core]\n\tfsmonitor = x\n");
+    expect(await undoCommand(["--root", root, "--yes"])).toBe(1);
+    expect(existsSync(join(root, ".git", "config"))).toBe(false);
+  });
+});
+
+describe("git を読み取りだけで呼ぶ (2026-11-04)", () => {
+  const hasGit = spawnSync("git", ["--version"]).status === 0;
+  it.skipIf(!hasGit)("リポジトリの設定の core.fsmonitor のコマンドを git status / ls-files のついでに実行しない", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tazuna-sec-fsmonitor-"));
+    const git = (...args: string[]): void => {
+      const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: root });
+      expect(r.status, args.join(" ")).toBe(0);
+    };
+    git("init", "-q", ".");
+    writeFileSync(join(root, "a.txt"), "hello\n");
+    git("add", "a.txt");
+    git("commit", "-q", "--no-verify", "-m", "init");
+    // 設定が書き換えられていた場合 (tazuna の外で) を想定。印のファイルはルートからの相対で作る
+    git("config", "core.fsmonitor", "touch fsmonitor-ran; false");
+    writeFileSync(join(root, "a.txt"), "changed\n");
+
+    expect(await gitDirtyFiles(root)).toEqual([" M a.txt"]);
+    const listed = listGitFiles(root);
+    expect(listed.ok && listed.files).toEqual(["a.txt"]);
+    expect(existsSync(join(root, "fsmonitor-ran"))).toBe(false);
   });
 });
 
