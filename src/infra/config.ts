@@ -19,6 +19,11 @@ export interface LocalConfig {
   clipReportOnFailure: boolean;
   /** create した .vb / .cs を旧スタイル .vbproj / .csproj へ自動登録する (設計書 §11.1)。--no-vbproj で一時無効化 */
   vbproj: { register: boolean };
+  /**
+   * 1 回の適用 = 1 コミット。true なら、次の changes.md を当てる直前に前回の適用の分 (tazuna が書いたファイル) を
+   * changes.md の概要でコミットする (適用の直後にはコミットしない。git diff で確かめる流れを変えないため)
+   */
+  git: { commitEachApply: boolean };
 }
 
 export const DEFAULT_CONFIG: LocalConfig = {
@@ -28,6 +33,7 @@ export const DEFAULT_CONFIG: LocalConfig = {
   vscodeCommand: "code",
   clipReportOnFailure: true,
   vbproj: { register: true },
+  git: { commitEachApply: false },
 };
 
 /** tazuna init が書く .tazuna/config.json の雛形 (PC ごとの設定。git の管理外) */
@@ -37,7 +43,8 @@ export const CONFIG_TEMPLATE = `{
   "historyLimit": null,
   "vscodeCommand": "code",
   "clipReportOnFailure": true,
-  "vbproj": { "register": true }
+  "vbproj": { "register": true },
+  "git": { "commitEachApply": false }
 }
 `;
 
@@ -90,6 +97,10 @@ function validateConfig(c: LocalConfig): LocalConfig {
   if (typeof c.vbproj !== "object" || c.vbproj === null || typeof register !== "boolean") {
     throw new Error('config の vbproj が不正です ({ "register": true | false } を指定)');
   }
+  const commitEachApply: unknown = c.git?.commitEachApply;
+  if (typeof c.git !== "object" || c.git === null || typeof commitEachApply !== "boolean") {
+    throw new Error('config の git が不正です ({ "commitEachApply": true | false } を指定)');
+  }
   const limit: unknown = c.historyLimit;
   if (limit !== null && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1)) {
     throw new Error(`config の historyLimit が不正です: ${String(limit)} (null または 1 以上の整数)`);
@@ -119,6 +130,11 @@ export function loadConfig(root: string): LocalConfig {
       ...DEFAULT_CONFIG.vbproj,
       ...(global.vbproj ?? {}),
       ...(project.vbproj ?? {}),
+    },
+    git: {
+      ...DEFAULT_CONFIG.git,
+      ...(global.git ?? {}),
+      ...(project.git ?? {}),
     },
   });
 }

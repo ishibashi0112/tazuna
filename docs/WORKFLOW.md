@@ -295,6 +295,37 @@ DB に接続するのは ashiato だけで、実行するのは SELECT だけで
 見張るテーブルを絞ってください (手順ファイルに書かれたテーブルは含めます)。Excel の証跡が
 要るときは `--save-session` を付け、表示された `ashiato export ...` を打ちます。
 
+### 3-10. changes.md 1 回ごとにコミットする (git.commitEachApply)
+
+`.tazuna/config.json` で有効にすると、**次の changes.md を当てる直前に、前回の適用の分を
+コミット**します (0.23.0)。当てた直後にはコミットしないので、git diff には常に「最後に当てた分と、
+その後の手修正」だけが出て、確かめてからビルドする流れはそのままです。
+
+```json
+{ "git": { "commitEachApply": true } }
+```
+
+1. 作業用のブランチを切る (ここはご自身で。例: `git switch -c feature/受注画面`)
+2. changes.md ① を当てる (watch でも `npx tazuna` でも同じ)。git diff で ① だけを確かめ、ビルドや手修正をする
+3. changes.md ② が来ると、tazuna がまず ① の分 (確かめる間の手修正を含む) を ① の概要でコミットし、
+   それから ② を当てる。結果の最後に「次の changes.md を当てる前に「件名」でコミットします」と、次の
+   コミットの件名が出る
+4. バッチの最後 (引継ぎ書の回など) を確かめたら `npx tazuna commit` で締める
+5. 共有の前にまとめたければ squash してから push する (push はしません)
+
+- コミットするのは前回の適用で tazuna が書いたファイルだけです。手で変えたほかのファイルや、
+  ステージ済みの変更は入れません (それらはご自身でコミットしてください)
+- メッセージは changes.md の概要から作ります (最初の 1 文が件名。末尾に `Tazuna-History: <履歴 ID>`)。
+  変えたいときは、次を当てる前にご自身でコミットしてください。前回の適用の後にコミットが増えている
+  (ブランチを変えた) ときは、ご自身でコミットしたものとみなして tazuna はコミットしません
+- コミットしたものは `npx tazuna undo` では戻せません (`git revert` を案内します)。まだコミットしていない
+  最後の 1 回は今までどおり `npx tazuna undo` で戻せます
+- tazuna のコミットではフック (pre-commit など) を動かしません。確かめる前の changes.md が書き換えた
+  フックを動かさないためです。フックを通したいときはご自身でコミットしてください
+- コミットできないとき (git の名前が未設定・別の git の操作中など) は、次の changes.md を当てずに止めます。
+  git の問題を直してから当て直してください
+- 設定を有効にしなくても、`npx tazuna commit` で直近の適用の分を同じようにコミットできます
+
 ## 4. コマンド早見表
 
 ```text
@@ -312,6 +343,7 @@ npx tazuna watch                   起動したままにすると、届いた ch
 npx tazuna                         Downloads の changes.md を適用
 npx tazuna undo                    直前の適用を巻き戻す (続けて実行すると 1 つずつ前へ)
 npx tazuna show                    直前の適用の差分を表示
+npx tazuna commit                  直近の適用で書いたファイルだけを、changes.md の概要でコミット (3-10)
 npx tazuna protocol                内蔵の規約文を表示する (protocol.md で上書きしたいときの元に)
 
 npx ashiato schema --tables "A,B"   テスト用 DB のテーブル定義を docs/db/schema.md に書き出す (3-8)

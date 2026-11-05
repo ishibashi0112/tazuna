@@ -41,6 +41,13 @@ export interface Manifest {
   changesFingerprint?: string;
   /** undo で巻き戻した日時 (ISO 8601)。巻き戻し済みの履歴は再適用検出の対象外 */
   undoneAt?: string;
+  /** この適用で書いたファイルを tazuna がコミットした記録 (git.commitEachApply / tazuna commit) */
+  committed?: { sha: string; at: string };
+  /**
+   * 適用したときの HEAD (コミットが無ければ null。git が無い・リポジトリでなければ省略)。
+   * 次の適用の前に自動でコミットするのは、HEAD がこのままのときだけ (利用者が先にコミットしていれば任せる)
+   */
+  gitHead?: string | null;
   files: ManifestFileEntry[];
 }
 
@@ -142,6 +149,36 @@ export function markUndone(root: string, id: string, at: Date): void {
   const manifest = JSON.parse(readFileSync(p, "utf8")) as Manifest;
   manifest.undoneAt = at.toISOString();
   writeFileSync(p, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+}
+
+/** tazuna がこの適用の分をコミットしたことを manifest に記録する (undo と次のコミットの対象から外すため) */
+export function markCommitted(root: string, id: string, sha: string, at: Date): void {
+  const p = join(historyRoot(root), id, "manifest.json");
+  const manifest = JSON.parse(readFileSync(p, "utf8")) as Manifest;
+  manifest.committed = { sha, at: at.toISOString() };
+  writeFileSync(p, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+}
+
+/**
+ * まだコミットしていない直近の適用。巻き戻していない直近の履歴がコミット済みなら null
+ * (それより前には戻らない。前の分は、その次の適用の前にコミットしたか、利用者に任せたもの)。
+ * manifest は非信頼入力なので、読めない・形が違う履歴に当たったら null (推測でコミットしない)
+ */
+export function findUncommittedApply(root: string): { id: string; manifest: Manifest } | null {
+  for (const id of listHistoryIds(root).reverse()) {
+    let manifest: Manifest | null;
+    try {
+      manifest = readManifest(root, id);
+    } catch {
+      return null;
+    }
+    if (manifest === null || typeof manifest !== "object" || !Array.isArray(manifest.files)) return null;
+    if (manifest.undoneAt !== undefined) continue;
+    if (manifest.committed !== undefined) return null;
+    if (!manifest.files.some((f) => f?.applied === true)) continue;
+    return { id, manifest };
+  }
+  return null;
 }
 
 /**
