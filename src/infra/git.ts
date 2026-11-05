@@ -1,5 +1,9 @@
 import { execFile, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
+import { TOOL_NAME } from "../brand.ts";
 
 const execFileP = promisify(execFile);
 
@@ -62,4 +66,114 @@ export function listGitFiles(rootDir: string): { ok: true; files: string[] } | {
   // 競合中のファイルは段ごとに並ぶので重ねない
   const files = [...new Set(result.stdout.toString("utf8").split("\0").filter((p) => p !== ""))];
   return { ok: true, files };
+}
+
+export type GitCommitResult =
+  | { kind: "committed"; sha: string; files: string[] }
+  /** 対象のファイルに HEAD との差が無い (利用者がコミット済み・元に戻した) */
+  | { kind: "nothing" }
+  /** git が無い・git のリポジトリでない */
+  | { kind: "not-repo"; message: string }
+  | { kind: "failed"; message: string };
+
+/** git を同期で実行する (読み取りと同じ指定に加えて、パスを文字どおりに扱い、フックを動かさない) */
+function runGit(
+  cwd: string,
+  args: readonly string[],
+  noHooksDir: string,
+  input?: string,
+): { status: number | null; stdout: Buffer; stderr: string; error?: NodeJS.ErrnoException } {
+  const result = spawnSync("git", [...GIT_READ_ONLY_ARGS, "-c", `core.hooksPath=${noHooksDir}`, ...args], {
+    cwd,
+    // パスの * や :(glob) をパターンとして読ませない (ファイル名どおりのものだけを対象にする)
+    env: { ...gitEnv(), GIT_LITERAL_PATHSPECS: "1" },
+    input,
+    maxBuffer: 64 * 1024 * 1024,
+    windowsHide: true,
+    timeout: 120_000,
+  });
+  return {
+    status: result.status,
+    stdout: result.stdout ?? Buffer.alloc(0),
+    stderr: (result.stderr ?? Buffer.alloc(0)).toString("utf8"),
+    ...(result.error !== undefined ? { error: result.error as NodeJS.ErrnoException } : {}),
+  };
+}
+
+const nulList = (out: Buffer): string[] => out.toString("utf8").split("\0").filter((p) => p !== "");
+
+/** git の出力の先頭の数行 (失敗の理由として見せる) */
+const firstLines = (text: string, n = 8): string =>
+  text
+    .split(/\r?\n/)
+    .map((l) => l.trimEnd())
+    .filter((l) => l !== "")
+    .slice(0, n)
+    .join("\n");
+
+/**
+ * 指定したファイル (ルート相対・`/` 区切り) だけをコミットする (1 回の適用 = 1 コミット)。
+ * - 未追跡のものは `git add` してから (.gitignore に一致するものは入れない)
+ * - `git commit --only` なので、ほかのファイルの手元の変更・ステージ済みの変更はコミットに入らない
+ * - メッセージは標準入力から渡す (AI の書いた概要を引数にしない。長さの制限も受けない)
+ * - フックは動かさない (core.hooksPath を存在しない場所に向ける)。フックの置き場が作業ツリーにある
+ *   リポジトリ (husky など) では、確かめる前の changes.md が書き換えたフックを動かしてしまうため
+ */
+export function commitPaths(rootDir: string, paths: readonly string[], message: string): GitCommitResult {
+  if (paths.length === 0) return { kind: "nothing" };
+  // 存在しないディレクトリ (乱数入り) をフックの置き場に指定して、どのフックも見つからないようにする
+  const noHooksDir = join(tmpdir(), `${TOOL_NAME}-no-hooks-${randomBytes(8).toString("hex")}`);
+  const git = (args: readonly string[], input?: string) => runGit(rootDir, args, noHooksDir, input);
+
+  const inside = git(["rev-parse", "--is-inside-work-tree"]);
+  if (inside.error !== undefined) {
+    return {
+      kind: "not-repo",
+      message: inside.error.code === "ENOENT" ? "git が見つかりません" : inside.error.message,
+    };
+  }
+  if (inside.status !== 0 || inside.stdout.toString("utf8").trim() !== "true") {
+    return { kind: "not-repo", message: firstLines(inside.stderr, 1) || "git のリポジトリではありません" };
+  }
+
+  const tracked = git(["ls-files", "-z", "--cached", "--", ...paths]);
+  const untracked = git(["ls-files", "-z", "--others", "--exclude-standard", "--", ...paths]);
+  if (tracked.status !== 0 || untracked.status !== 0) {
+    return { kind: "failed", message: firstLines(tracked.stderr || untracked.stderr) || "git ls-files に失敗しました" };
+  }
+  const added = nulList(untracked.stdout);
+  const targets = [...new Set([...nulList(tracked.stdout), ...added])];
+  if (targets.length === 0) return { kind: "nothing" };
+  if (added.length > 0) {
+    const add = git(["add", "--", ...added]);
+    if (add.status !== 0) return { kind: "failed", message: firstLines(add.stderr) || "git add に失敗しました" };
+  }
+  const status = git(["status", "--porcelain", "-z", "--", ...targets]);
+  if (status.status !== 0) return { kind: "failed", message: firstLines(status.stderr) || "git status に失敗しました" };
+  if (nulList(status.stdout).length === 0) return { kind: "nothing" };
+
+  const commit = git(["commit", "--only", "--no-verify", "--cleanup=whitespace", "-F", "-", "--", ...targets], message);
+  if (commit.error !== undefined) return { kind: "failed", message: commit.error.message };
+  if (commit.status !== 0) {
+    return {
+      kind: "failed",
+      message: firstLines(commit.stderr) || firstLines(commit.stdout.toString("utf8")) || "git commit に失敗しました",
+    };
+  }
+  const head = git(["rev-parse", "HEAD"]);
+  return { kind: "committed", sha: head.stdout.toString("utf8").trim(), files: targets };
+}
+
+/**
+ * 今の HEAD のコミット。コミットがまだ無いリポジトリでは null、git が無い・リポジトリでなければ undefined。
+ * 適用のときに manifest に残し、次の適用の前のコミットで「その間に利用者がコミットしたか」を見分ける
+ */
+export function gitHeadCommit(rootDir: string): string | null | undefined {
+  const run = (args: readonly string[]) =>
+    spawnSync("git", [...GIT_READ_ONLY_ARGS, ...args], { cwd: rootDir, env: gitEnv(), windowsHide: true, timeout: 60_000 });
+  const inside = run(["rev-parse", "--is-inside-work-tree"]);
+  if (inside.error !== undefined || inside.status !== 0 || inside.stdout.toString("utf8").trim() !== "true") return undefined;
+  const head = run(["rev-parse", "--verify", "-q", "HEAD"]);
+  if (head.error !== undefined) return undefined;
+  return head.status === 0 ? head.stdout.toString("utf8").trim() : null;
 }

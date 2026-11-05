@@ -5,7 +5,7 @@ import { join, dirname } from "node:path";
 import { TOOL_NAME } from "./brand.ts";
 import { err as errLine } from "./infra/term.ts";
 
-const SUBCOMMANDS = ["pack", "build", "undo", "show", "list", "protocol", "init", "watch"] as const;
+const SUBCOMMANDS = ["pack", "build", "undo", "show", "list", "protocol", "init", "watch", "commit"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number] | "apply";
 
 function version(): string {
@@ -26,6 +26,8 @@ Usage:
   ${T} undo [ID]      履歴を巻き戻す (ID 省略時: 直近)
   ${T} show [ID]      履歴の差分を表示 (VS Code / ブラウザ)。--edit で手修正 (VS Code)
   ${T} list           履歴の一覧を表示
+  ${T} commit         直近の適用で書いたファイルだけを、changes.md の概要でコミット (push はしない)。
+                        設定の git.commitEachApply を有効にすると、次の適用の前に自動で行う
   ${T} build [入力]   MSBuild でビルドし、失敗したらエラーと周辺のコードをクリップボードへ
   ${T} protocol       AI への規約文を標準出力に出す (パックには内蔵の規約文が自動で入る。
                         repomix など別の道具で使うとき用)
@@ -92,6 +94,10 @@ export async function main(argv: string[]): Promise<number> {
     case "watch": {
       const { watchCommand } = await import("./commands/watch.ts");
       return watchCommand(rest);
+    }
+    case "commit": {
+      const { commitCommand } = await import("./commands/commit.ts");
+      return commitCommand(rest);
     }
     default:
       process.stderr.write(`${TOOL_NAME}: "${sub}" は未実装です\n`);

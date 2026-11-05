@@ -343,6 +343,19 @@ npm の tazuna は 2026-11-01 時点で空き。
   対象と同じ名前のファイルが git の一覧 (infra/git.ts の listGitFiles。pack-io.ts から移した。前の条件を満たしたときだけ求める) に無いときだけ。watch は
   当てずレポートも出さず (クリップボードを上書きしない) Downloads に残す (kind "other-repo")。手で実行した tazuna は
   注記してから従来どおりレポートする。同じ名前があればフォルダの書き違いとみなす。create だけのものは見分けない
+- 1 回の適用 = 1 コミット (v0.23.0 / 2026-11-05、利用者が「次の適用の前にコミット」を選んだ): `tazuna commit` と config の
+  `git.commitEachApply` (既定 false)。**当てた直後ではなく、次の changes.md を当てる直前に前回の分をコミットする**
+  (直後にコミットすると git diff が空になり「git diff で確かめてからビルド」の流れが崩れるため)。最後の回は tazuna commit で締める。
+  メッセージは core/commit-message.ts の buildCommitMessage (概要の最初の 1 文が件名、残りが本文、末尾に
+  `Tazuna-History: <id>`。プロンプトは変えていない)。コミットの本体は infra/git.ts の commitPaths (ls-files で追跡中 +
+  ignore されない新規に絞る → 新規だけ git add → status で変更が無ければ nothing → `commit --only --no-verify -F -`)。
+  **フックは動かさない** (`-c core.hooksPath=<存在しない一時ディレクトリ>` + `--no-verify`。確かめる前の changes.md が
+  .husky/ などを書き換えていても動かさない)、`GIT_LITERAL_PATHSPECS=1`、メッセージは標準入力。結線は
+  commands/commit-apply.ts (lookupPendingCommit / commitPending)。manifest に適用時の `gitHead` (rev-parse。毎回記録、
+  コミットが無ければ null) と `committed` を足し、自動のコミットは HEAD が動いていれば (利用者が自分でコミットした・
+  ブランチを変えた) 見送る。manifest のパスは invalidPathReason で検証する。コミットできなければ次を当てない
+  (ApplyOutcomeKind "commit-failed"。watch は Downloads に残す)。コミット済みの履歴は undo しない (git revert を案内)。
+  push・stash・ブランチ操作はしない (エージェントの領域に踏み込まない線引き)。テストは tests/commit.test.ts
 
 ### 伏せ字 [MASKED] の扱い (2026-10-31, v0.14.0)
 
@@ -527,7 +540,8 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   空白・HFS+ が無視する文字・8.3 の短い名前 `GIT~1` を同一視。manifest の `\` 区切りも区切りとして見る。v0.22.1)。2026-11-04 に、changes.md で `.git/config` に
   `core.fsmonitor` を書くと次の適用の `git status` がそのコマンドを実行すること、`.git` の中の変更は git diff に出ないことを
   再現した (watch は確認なし)。git は `-c core.fsmonitor=false` + `GIT_OPTIONAL_LOCKS=0` で呼ぶ (infra/git.ts。
-  `--no-optional-locks` は git 2.15 未満で使えないため環境変数)。git の子プロセスを足すときも同じ指定を使う
+  `--no-optional-locks` は git 2.15 未満で使えないため環境変数)。git の子プロセスを足すときも同じ指定を使う。
+  git に書き込むのは tazuna commit / git.commitEachApply のコミットだけ (フックを止める。上記「1 回の適用 = 1 コミット」)
 - `vscodeCommand` はコマンド名か絶対パスのみ (相対パス拒否 — リポジトリ内スクリプトの実行防止)
 - 端末出力は `src/infra/term.ts` の `out`/`err` を必ず使う (C0/C1 制御文字を除去。
   ANSI エスケープ注入対策)。`process.stdout.write` 直書きは protocol (信頼済み同梱テキスト) のみ可。
@@ -603,6 +617,8 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   v0.22.0: 2026-11-04 watch の往復を楽にする (結果をタイトルと結果の行で知らせる (ベルは --bell)、当てなかった Downloads の
   changes.md を unapplied/ へ片付ける、別のリポジトリ向けらしいものを当てない)。2026-11-04 公開 /
   v0.22.1: 2026-11-04 changes.md で .git と状態ディレクトリを変更させない + git を読み取りだけで呼ぶ (セキュリティ修正)。
+  2026-11-04 公開 /
+  v0.23.0: 2026-11-05 1 回の適用 = 1 コミット (`tazuna commit` + `git.commitEachApply`。次の適用の直前に前回の分をコミット)。
   リポジトリ: https://github.com/ishibashi0112/tazuna (旧 https://github.com/ishibashi0112/petari。GitHub が転送する)
   リリース手順: version を上げて `pnpm publish` (`prepublishOnly` が typecheck → test → build を実行。認証はユーザー)
 - **publish 事故と再発防止 (2026-09-14)**: v0.9.0 は `package.json` の version だけ 0.9.0 で、

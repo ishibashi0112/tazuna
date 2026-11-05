@@ -318,6 +318,31 @@ Ctrl+C で終了する。
 - 前提: ブラウザのダウンロード先とコードが同じ PC にあること。RDP 越しに changes.md を
   受け渡す運用では効かない(従来どおり `tazuna` / `tazuna --clip`)
 
+### 4.8 `tazuna commit` と `git.commitEachApply` — 1 回の適用 = 1 コミット(v0.23.0)
+
+- `tazuna commit`: コミットしていない直近の適用(undo していないもの)で tazuna が書いたファイルだけを、
+  その changes.md の概要から作ったメッセージでコミットする。`--dry-run` はメッセージとファイルの表示だけ。
+  `--root <dir>`。push はしない
+- 設定 `git.commitEachApply`(既定 false): 有効なら、changes.md を当てる**直前に**前回の適用の分を自動で
+  コミットする(当てた直後ではない。git diff に「最後に当てた分と、その後の手修正」だけを残し、確かめてから
+  ビルドする流れを変えないため)。適用の結果の最後と `--dry-run`・確認の一覧に、次のコミットの件名を出す。
+  バッチの最後の 1 回は `tazuna commit` で締める
+- メッセージ(`core/commit-message.ts`): 件名 = 概要の最初の内容のある行の、最初の「。」の前まで
+  (Markdown の記号を外し、60 文字で切り詰め)。本文 = 概要の残り(コードブロックと「影響ファイル:」の一覧は除く)。
+  末尾にトレーラー `Tazuna-History: <履歴 ID>`。概要が空なら `tazuna で changes.md を適用 (N ファイル)`。
+  概要は AI の書いたものなので、制御文字・双方向制御文字を除く
+- 入れるもの: 履歴に記録したファイル(手修正を含めた今の内容。`.gitignore` で除外した新規ファイルは除く)。
+  手で変えたほかのファイル・ステージ済みの変更は入れない(`git commit --only -- <パス>`)。変更が無ければコミットしない
+- 自動のコミットを見送るとき: 適用したときから HEAD が動いた(利用者が自分でコミットした・ブランチを変えた)、
+  適用したときの HEAD の記録がない、manifest に不正なパスがある。見送ったことは表示する。git のリポジトリでなければ
+  コミットせずに当てる
+- コミットできないとき(名前の未設定・`index.lock` など): 次の changes.md を**当てずに**止める(exit 1。watch では
+  Downloads に残す)。当てると前回の分と混ざり、1 回 1 コミットにならないため
+- 安全: フックを動かさない(`-c core.hooksPath=<存在しない一時ディレクトリ>` + `--no-verify`。確かめる前の
+  changes.md が husky などのフックを書き換えていても動かさない)、パスは `GIT_LITERAL_PATHSPECS=1` で文字どおり、
+  メッセージは標準入力、`core.fsmonitor` も無効(§9)。manifest は非信頼入力としてパスを検証する
+- コミット済みの履歴は `tazuna undo` で戻さない(`git revert <sha>` を案内する)。`tazuna list` に「コミット済み」と出す
+
 ---
 
 ## 5. 履歴ディレクトリ仕様
@@ -342,7 +367,8 @@ Ctrl+C で終了する。
   対象ファイル一覧、各ファイルの操作種別、ブロック数、before/after の SHA-256、
   適用日時、成否、`--partial` 時のスキップ情報、入力ソース(パス/クリップボード)。
   加えて changes.md の指紋 `changesFingerprint`(§6.1)と、`tazuna undo` で巻き戻した
-  日時 `undoneAt`(巻き戻し時に追記)。
+  日時 `undoneAt`(巻き戻し時に追記)。適用したときの HEAD `gitHead`(git のリポジトリのとき。まだコミットが
+  無ければ null)と、`tazuna commit` / `git.commitEachApply` でコミットした `committed`(sha と日時。§4.8)。
 - `.tazuna/` は個人の作業ログのため `.gitignore` 推奨(初回に追記を提案)。パックにも入れない
   (.gitignore に書いていなくても)。
 - 旧名(petari)のリポジトリ: `.tazuna/` が無く `.petari/` だけがあれば、`.petari/` を使い続ける
@@ -508,6 +534,7 @@ AI チャットへの貼り返しが 1 ペーストで済む。config で無効�
   - ネスト構成(親ディレクトリ配下にメニュー単位の Git リポジトリが並ぶ)を想定した仕様。
     メニューフォルダ内で実行すればそのメニューがルートになる。
 - Git 作業ツリーに未コミット変更がある場合は警告し、続行確認する(Git 自体は必須としない)。
+- git に書き込むのは `tazuna commit` と `git.commitEachApply` のコミットだけ(§4.8。フックは動かさない・push しない)。
 - シンボリックリンクの書き換えは対象外(検出したらエラー)。
 
 ---
@@ -521,7 +548,8 @@ AI チャットへの貼り返しが 1 ペーストで済む。config で無効�
   "historyLimit": null,          // 履歴の保持件数上限(null = 無制限)
   "vscodeCommand": "code",       // show で使うコマンド
   "clipReportOnFailure": true,   // 失敗レポートをクリップボードへ自動コピー(§7)
-  "vbproj": { "register": true } // create した .vb / .cs の .vbproj / .csproj 自動登録(§3.2.1)
+  "vbproj": { "register": true }, // create した .vb / .cs の .vbproj / .csproj 自動登録(§3.2.1)
+  "git": { "commitEachApply": false } // 次の changes.md を当てる直前に前回の分をコミット(§4.8)
 }
 ```
 

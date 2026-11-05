@@ -113,6 +113,15 @@ export function describeWatchResult(
           `このリポジトリ向けなら ${TOOL_NAME} ${quoted(file.path)}${rootSuffix(file.rootOption)} で失敗の理由を確かめられます`,
         ],
       };
+    case "commit-failed":
+      return {
+        title: "✗ コミットできず止めました",
+        headline: "✗ 前回の適用をコミットできなかったため、この changes.md は当てていません (理由は上)",
+        details: [
+          `git の問題を直してから ${TOOL_NAME} ${quoted(file.path)}${rootSuffix(file.rootOption)} で当ててください`,
+          `changes.md は ${file.path} に残しています`,
+        ],
+      };
     case "dry-run":
       return {
         title: "dry-run: 検証しました",

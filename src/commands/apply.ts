@@ -15,6 +15,7 @@ import {
   type NewFileResolver,
   type Plan,
 } from "../core/applier.ts";
+import { buildCommitMessage } from "../core/commit-message.ts";
 import { changeSetFingerprint } from "../core/fingerprint.ts";
 import { fileNameKey, looksLikeOtherRepository } from "../core/other-repo.ts";
 import { PRESENCE_STAGE_LABEL } from "../core/matcher.ts";
@@ -36,7 +37,7 @@ import {
 } from "../infra/downloads.ts";
 import { deleteFile, isInsideRoot, readFileState, sha256, writeBytes } from "../infra/files.ts";
 import { stateDir } from "../infra/history.ts";
-import { gitDirtyFiles, listGitFiles } from "../infra/git.ts";
+import { gitDirtyFiles, gitHeadCommit, listGitFiles } from "../infra/git.ts";
 import { collectStyleSampleGroups } from "../infra/new-file-style.ts";
 import { err, out, outEmphasis } from "../infra/term.ts";
 import {
@@ -50,6 +51,7 @@ import {
 } from "../infra/history.ts";
 import { confirm } from "../infra/prompt.ts";
 import { findProjectRoot } from "../infra/root.ts";
+import { commitPending, lookupPendingCommit, shortSha, type PendingLookup } from "./commit-apply.ts";
 import { formatVbprojPlan, planVbprojRegistrations, type VbprojPlan } from "./vbproj-register.ts";
 
 /** このファイルは書き込み対象か (適用済みのみのファイルは書き込み不要なので含めない) */
@@ -114,7 +116,8 @@ export interface DetectedChanges {
  * 適用 1 回の結果の種類 (tazuna watch が結果の通知と changes.md の片付けに使う・§4.7)
  * - applied: 書き込んだ / already-applied: すべて適用済みで書き込みなし / failed: 構文エラー・検証の失敗で何も書かない /
  *   duplicate: 適用済みの changes.md で、なお書き込みが起きるため止めた / other-repo: 別のリポジトリ向けらしく当てなかった
- *   (watch のみ) / dry-run / aborted: 確認で中止 / unreadable: 入力を読めない・見つからない
+ *   (watch のみ) / commit-failed: 当てる前の前回の分のコミット (git.commitEachApply) に失敗したため当てなかった /
+ *   dry-run / aborted: 確認で中止 / unreadable: 入力を読めない・見つからない
  */
 export type ApplyOutcomeKind =
   | "applied"
@@ -122,6 +125,7 @@ export type ApplyOutcomeKind =
   | "failed"
   | "duplicate"
   | "other-repo"
+  | "commit-failed"
   | "dry-run"
   | "aborted"
   | "unreadable";
@@ -426,10 +430,25 @@ export async function runApply(argv: string[], detected?: DetectedChanges): Prom
       return done("duplicate", 1);
     }
   }
+  // 1 回の適用 = 1 コミット (config git.commitEachApply): 当てる直前に前回の適用の分をコミットする
+  const commitLookup: PendingLookup | null = config.git.commitEachApply
+    ? lookupPendingCommit(root, { requireSameHead: true })
+    : null;
+  const printCommitPlan = (): void => {
+    if (commitLookup === null || commitLookup.kind === "none") return;
+    if (commitLookup.kind === "skip") {
+      out(`コミット: ${commitLookup.reason}`);
+      return;
+    }
+    const p = commitLookup.pending;
+    out(`コミット: 当てる前に、前回の適用 (履歴 ${p.id}・${p.paths.length} ファイル) を「${p.subject}」でコミットします`);
+  };
+
   if (values["dry-run"]) {
     out(`dry-run: 適用予定 ${applicable.length} ファイル (書き込みなし)`);
     printPreview(applicable);
     printExtras();
+    printCommitPlan();
     printAlreadyApplied(plan.outcomes);
     const dryRunNote = buildBlankInsensitiveNote(plan.outcomes);
     if (dryRunNote !== null) out(dryRunNote);
@@ -455,6 +474,7 @@ export async function runApply(argv: string[], detected?: DetectedChanges): Prom
   if (plan.failures.length > 0) {
     out(`  (検証失敗 ${plan.failures.length} 件は --partial によりスキップ)`);
   }
+  printCommitPlan();
   const dirty = await gitDirtyFiles(root);
   if (dirty !== null && dirty.length > 0) {
     out(`警告: Git 作業ツリーに未コミットの変更が ${dirty.length} 件あります`);
@@ -463,6 +483,24 @@ export async function runApply(argv: string[], detected?: DetectedChanges): Prom
     if (!(await confirm("適用しますか?"))) {
       out("中止しました。");
       return done("aborted", 1);
+    }
+  }
+
+  if (commitLookup?.kind === "pending") {
+    const p = commitLookup.pending;
+    const r = commitPending(root, p, new Date());
+    if (r.kind === "committed") {
+      out(`前回の適用 (履歴 ${p.id}) をコミットしました: ${shortSha(r.sha)} ${p.subject}`);
+    } else if (r.kind === "nothing") {
+      out(`前回の適用 (履歴 ${p.id}) のファイルには変更が無いため、コミットしませんでした`);
+    } else if (r.kind === "not-repo") {
+      err(`${TOOL_NAME}: 前回の適用をコミットできません (${r.message})。コミットせずに当てます`);
+    } else {
+      // 1 回 1 コミットを崩さないよう、前回の分をコミットできないうちは次を当てない
+      err(`${TOOL_NAME}: 前回の適用 (履歴 ${p.id}) をコミットできなかったため、この changes.md は当てていません:`);
+      for (const line of r.message.split("\n")) err(`  ${line}`);
+      err(`  git の問題を直してから、もう一度当ててください (前回の分だけを先にコミットするなら ${TOOL_NAME} commit)`);
+      return done("commit-failed", 1);
     }
   }
 
@@ -535,6 +573,8 @@ export async function runApply(argv: string[], detected?: DetectedChanges): Prom
       afterSha256: sha256(w.after),
     });
   }
+  // 適用したときの HEAD (次の適用の前の自動コミットで、その間に利用者がコミットしたかを見分ける)
+  const gitHead = gitHeadCommit(root);
   const manifest: Manifest = {
     id,
     appliedAt: new Date().toISOString(),
@@ -542,6 +582,7 @@ export async function runApply(argv: string[], detected?: DetectedChanges): Prom
     partial: values.partial,
     source,
     changesFingerprint: fingerprint,
+    ...(gitHead !== undefined ? { gitHead } : {}),
     files: entries,
   };
   finishHistory(root, id, manifest, after);
@@ -583,6 +624,13 @@ export async function runApply(argv: string[], detected?: DetectedChanges): Prom
 
   out("");
   out(`git diff で差分を確認してください。巻き戻しは \`${TOOL_NAME} undo\` です。`);
+  if (config.git.commitEachApply) {
+    const next = buildCommitMessage(changeSet.header, id, applicable.length);
+    out(
+      `コミット: 次の changes.md を当てる前に「${next.subject}」でコミットします ` +
+        `(区切りで締めるときは ${TOOL_NAME} commit。メッセージを変えたいときは、その前にご自身でコミットしてください)`,
+    );
+  }
   return done("applied", 0, applicable.length);
 }
 

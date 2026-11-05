@@ -21,6 +21,7 @@ import {
 import { confirm } from "../infra/prompt.ts";
 import { findProjectRoot } from "../infra/root.ts";
 import { err, out } from "../infra/term.ts";
+import { shortSha } from "./commit-apply.ts";
 
 interface UndoAction {
   entry: ManifestFileEntry;
@@ -74,6 +75,15 @@ export async function undoCommand(argv: string[]): Promise<number> {
   }
   if (manifest.undoneAt !== undefined) {
     err(`${TOOL_NAME}: 履歴 ${id} は巻き戻し済みです (${TOOL_NAME} list で確認してください)`);
+    return 1;
+  }
+  // tazuna がコミットした適用は git で戻す (作業ツリーだけ戻すと、コミットと食い違った変更が残るため)
+  if (manifest.committed !== undefined) {
+    const sha = typeof manifest.committed?.sha === "string" ? shortSha(manifest.committed.sha) : "";
+    err(
+      `${TOOL_NAME}: 履歴 ${id} はコミット済みです${sha !== "" ? ` (${sha})` : ""}。` +
+        `戻すときは ${sha !== "" ? `git revert ${sha}` : "git revert"} を使ってください`,
+    );
     return 1;
   }
 
