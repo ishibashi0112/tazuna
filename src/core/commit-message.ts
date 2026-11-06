@@ -116,3 +116,41 @@ export function buildCommitMessage(header: string, historyId: string, fileCount:
   parts.push("", `${HISTORY_TRAILER}: ${historyId}`);
   return { subject, message: `${parts.join("\n")}\n` };
 }
+
+/** まとめてコミットする 1 回分 */
+export interface CommitEntry {
+  header: string;
+  historyId: string;
+  fileCount: number;
+}
+
+/**
+ * 前回のコミットの後に当てた複数の changes.md を 1 つにまとめたメッセージ (tazuna commit)。
+ * 件名は最初の回の件名、本文は各回の件名の箇条書き、末尾に各回の履歴 ID のトレーラー。1 回だけなら buildCommitMessage と同じ
+ */
+export function buildBatchCommitMessage(entries: readonly CommitEntry[]): CommitMessage {
+  const [first, ...rest] = entries;
+  if (first === undefined) return buildCommitMessage("", "", 0);
+  if (rest.length === 0) return buildCommitMessage(first.header, first.historyId, first.fileCount);
+  const subjects = entries.map((e) => buildCommitMessage(e.header, e.historyId, e.fileCount).subject);
+  const subject = subjects[0] as string;
+  const lines = [
+    subject,
+    "",
+    ...subjects.map((s) => `- ${s}`),
+    "",
+    ...entries.map((e) => `${HISTORY_TRAILER}: ${e.historyId}`),
+  ];
+  return { subject, message: `${lines.join("\n")}\n` };
+}
+
+/**
+ * 件名を利用者の指定 (tazuna commit -m) に替える。改行と制御文字は除く。空になれば null
+ */
+export function withSubject(message: CommitMessage, subject: string): CommitMessage | null {
+  const cleaned = subject.replace(/[\r\n]+/g, " ").replace(UNSAFE_CHARS, "").trim();
+  if (cleaned === "") return null;
+  const newline = message.message.indexOf("\n");
+  const rest = newline === -1 ? "\n" : message.message.slice(newline);
+  return { subject: cleaned, message: `${cleaned}${rest}` };
+}

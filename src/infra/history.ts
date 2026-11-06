@@ -160,25 +160,33 @@ export function markCommitted(root: string, id: string, sha: string, at: Date): 
 }
 
 /**
- * まだコミットしていない直近の適用。巻き戻していない直近の履歴がコミット済みなら null
- * (それより前には戻らない。前の分は、その次の適用の前にコミットしたか、利用者に任せたもの)。
- * manifest は非信頼入力なので、読めない・形が違う履歴に当たったら null (推測でコミットしない)
+ * まだコミットしていない適用 (古い順)。巻き戻していない直近の履歴から遡り、同じコミットの上で当てたもの
+ * (適用したときの HEAD が直近の適用と同じ) を集める。コミット済みの履歴・HEAD が違う履歴 (その間に利用者が
+ * コミットした・ブランチを変えた)・HEAD の記録がない履歴 (0.23.0 より前の版で当てた・git の外) の手前で止める
+ * (直近の 1 件は HEAD の記録がなくても含める)。manifest は非信頼入力なので、読めない・形が違う履歴に当たったら
+ * そこで止める (推測で含めない)
  */
-export function findUncommittedApply(root: string): { id: string; manifest: Manifest } | null {
+export function findUncommittedApplies(root: string): Array<{ id: string; manifest: Manifest }> {
+  const found: Array<{ id: string; manifest: Manifest }> = [];
   for (const id of listHistoryIds(root).reverse()) {
     let manifest: Manifest | null;
     try {
       manifest = readManifest(root, id);
     } catch {
-      return null;
+      break;
     }
-    if (manifest === null || typeof manifest !== "object" || !Array.isArray(manifest.files)) return null;
+    if (manifest === null || typeof manifest !== "object" || !Array.isArray(manifest.files)) break;
     if (manifest.undoneAt !== undefined) continue;
-    if (manifest.committed !== undefined) return null;
+    if (manifest.committed !== undefined) break;
     if (!manifest.files.some((f) => f?.applied === true)) continue;
-    return { id, manifest };
+    const newest = found[0];
+    if (newest !== undefined) {
+      const base = newest.manifest.gitHead;
+      if (base === undefined || manifest.gitHead !== base) break;
+    }
+    found.push({ id, manifest });
   }
-  return null;
+  return found.reverse();
 }
 
 /**

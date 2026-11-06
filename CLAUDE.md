@@ -363,6 +363,12 @@ npm の tazuna は 2026-11-01 時点で空き。
   ③Windows で vscodeCommand が既定の "code" なら show が既定のインストール先の Code.exe を探す (findWindowsVscode。
   環境変数はドライブからの絶対パスだけ)。Code.exe は VS Code が開いていないと本体として動き続けるため、切り離して起動する
   (launchDetached。待つと show が VS Code を閉じるまで終わらない)。Windows の実機では未確認。テストは tests/diff-guide.test.ts
+- まとめてコミット (v0.25.0 / 2026-11-06、利用者が「実装と docs の整理が別の changes.md・別のコミットになる」点から選んだ):
+  infra/history.ts の findUncommittedApplies が、直近の適用から遡って同じ gitHead の未コミットの履歴を集める (コミット済み・
+  HEAD が違う・HEAD の記録がない履歴の手前で止める。記録のない古い履歴まで遡ると、とうにコミットしたファイルの関係のない
+  手修正を入れるため)。commit-apply.ts の PendingCommit は ids / label を持ち、buildBatchCommitMessage (件名は最初の回、本文は
+  各回の件名の箇条書き、トレーラーは各回) でまとめる。`tazuna commit -m` は withSubject で件名だけを替える。自動のコミット
+  (commitEachApply) も同じ探し方 (設定ありなら前の回はコミット済みなので 1 回分になる)
 
 ### 伏せ字 [MASKED] の扱い (2026-10-31, v0.14.0)
 
@@ -628,6 +634,7 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   v0.23.0: 2026-11-05 1 回の適用 = 1 コミット (`tazuna commit` + `git.commitEachApply`。次の適用の直前に前回の分をコミット)。
   2026-11-05 公開 /
   v0.24.0: 2026-11-06 規約文 v6 (概要の 1 行目をコミットの件名に) + 適用の結果に増減の行数 + Windows の show が Code.exe を探す。
+  v0.25.0: 2026-11-06 tazuna commit が前回のコミットの後の適用をまとめて 1 コミットに + `-m` で件名を替える。
   リポジトリ: https://github.com/ishibashi0112/tazuna (旧 https://github.com/ishibashi0112/petari。GitHub が転送する)
   リリース手順: version を上げて `pnpm publish` (`prepublishOnly` が typecheck → test → build を実行。認証はユーザー)
 - **publish 事故と再発防止 (2026-09-14)**: v0.9.0 は `package.json` の version だけ 0.9.0 で、

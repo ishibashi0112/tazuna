@@ -1,13 +1,15 @@
 /**
- * tazuna commit — 直近の適用 (まだコミットしていないもの) で tazuna が書いたファイルだけを、changes.md の概要を
+ * tazuna commit — まだコミットしていない適用で tazuna が書いたファイルだけを、changes.md の概要を
  * メッセージにしてコミットする。config の git.commitEachApply では次の適用の前に自動で行う分を、バッチの最後に
- * 締めるときに使う (設定によらず使える)。push はしない。フックは動かさない (infra/git.ts の commitPaths)
+ * 締めるときに使う。設定なしで当て続けたときは、前回のコミットの後に当てた分をまとめて 1 コミットにする (v0.25.0)。
+ * -m で件名だけを替えられる。push はしない。フックは動かさない (infra/git.ts の commitPaths)
  */
 import { parseArgs } from "node:util";
 import { TOOL_NAME } from "../brand.ts";
 import { loadConfig } from "../infra/config.ts";
 import { findProjectRoot } from "../infra/root.ts";
 import { err, out } from "../infra/term.ts";
+import { withSubject } from "../core/commit-message.ts";
 import { commitPending, lookupPendingCommit, shortSha } from "./commit-apply.ts";
 
 export async function commitCommand(argv: string[]): Promise<number> {
@@ -16,6 +18,7 @@ export async function commitCommand(argv: string[]): Promise<number> {
     options: {
       root: { type: "string" },
       "dry-run": { type: "boolean", default: false },
+      message: { type: "string", short: "m" },
     },
     allowPositionals: false,
   });
@@ -31,9 +34,20 @@ export async function commitCommand(argv: string[]): Promise<number> {
     err(`${TOOL_NAME}: ${lookup.reason}`);
     return 1;
   }
-  const { pending } = lookup;
+  let pending = lookup.pending;
+  if (values.message !== undefined) {
+    const replaced = withSubject(pending, values.message);
+    if (replaced === null) {
+      err(`${TOOL_NAME}: -m の件名が空です`);
+      return 1;
+    }
+    pending = { ...pending, ...replaced };
+  }
   if (values["dry-run"]) {
-    out(`dry-run: 履歴 ${pending.id} の ${pending.paths.length} ファイルを、次のメッセージでコミットします (コミットはしていません)`);
+    out(`dry-run: ${pending.label}の ${pending.paths.length} ファイルを、次のメッセージでコミットします (コミットはしていません)`);
+    if (pending.ids.length > 1) {
+      for (const [i, id] of pending.ids.entries()) out(`  ${id}  ${pending.subjects[i] ?? ""}`);
+    }
     out("");
     for (const line of pending.message.trimEnd().split("\n")) out(`  ${line}`);
     out("");
@@ -43,12 +57,12 @@ export async function commitCommand(argv: string[]): Promise<number> {
   const result = commitPending(root, pending, new Date());
   switch (result.kind) {
     case "committed":
-      out(`コミットしました: ${shortSha(result.sha)} ${pending.subject} (履歴 ${pending.id}・${result.files.length} ファイル)`);
+      out(`コミットしました: ${shortSha(result.sha)} ${pending.subject} (${pending.label}・${result.files.length} ファイル)`);
       for (const p of result.files) out(`  ${p}`);
       out("push はしていません。共有するときはご自身で push してください");
       return 0;
     case "nothing":
-      out(`履歴 ${pending.id} のファイルには、コミットする変更がありません (コミット済みか、元に戻されています)`);
+      out(`${pending.label}のファイルには、コミットする変更がありません (コミット済みか、元に戻されています)`);
       return 0;
     case "not-repo":
       err(`${TOOL_NAME}: コミットできません: ${result.message}`);

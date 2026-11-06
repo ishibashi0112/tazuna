@@ -7,7 +7,7 @@ import { applyCommand } from "../src/commands/apply.ts";
 import { commitCommand } from "../src/commands/commit.ts";
 import { describeWatchResult } from "../src/commands/watch.ts";
 import { undoCommand } from "../src/commands/undo.ts";
-import { buildCommitMessage, SUBJECT_MAX_CHARS } from "../src/core/commit-message.ts";
+import { buildBatchCommitMessage, buildCommitMessage, SUBJECT_MAX_CHARS, withSubject } from "../src/core/commit-message.ts";
 import { listHistoryIds, readManifest } from "../src/infra/history.ts";
 
 const doc = (...lines: string[]): string => lines.join("\n");
@@ -63,6 +63,30 @@ describe("buildCommitMessage (changes.md の概要 → コミットメッセー�
     const m = buildCommitMessage("修正\u001B[31m‮した\r\n次の行", "id", 1);
     expect(m.subject).toBe("修正[31mした");
     expect(m.message).not.toMatch(/[\u001B‮\r]/);
+  });
+});
+
+describe("buildBatchCommitMessage / withSubject (まとめてコミットするときのメッセージ)", () => {
+  it("件名は最初の回の件名、本文は各回の件名、末尾に各回の履歴 ID。1 回だけなら buildCommitMessage と同じ", () => {
+    const entries = [
+      { header: "**変更概要**\n受注一覧に絞り込みを追加\n\n理由", historyId: "h1", fileCount: 2 },
+      { header: "ビルドエラーを修正", historyId: "h2", fileCount: 1 },
+    ];
+    const m = buildBatchCommitMessage(entries);
+    expect(m.subject).toBe("受注一覧に絞り込みを追加");
+    expect(m.message).toBe(
+      doc("受注一覧に絞り込みを追加", "", "- 受注一覧に絞り込みを追加", "- ビルドエラーを修正", "", "Tazuna-History: h1", "Tazuna-History: h2", ""),
+    );
+    expect(buildBatchCommitMessage([entries[1]!])).toEqual(buildCommitMessage("ビルドエラーを修正", "h2", 1));
+  });
+
+  it("件名を替える (改行・制御文字は除き、空なら null)", () => {
+    const m = buildCommitMessage("一つ目\n\n本文", "h1", 1);
+    expect(withSubject(m, "新しい件名\n二行目\u001B")).toEqual({
+      subject: "新しい件名 二行目",
+      message: doc("新しい件名 二行目", "", "本文", "", "Tazuna-History: h1", ""),
+    });
+    expect(withSubject(m, " \n ")).toBeNull();
   });
 });
 
@@ -170,14 +194,85 @@ describe.skipIf(!hasGit)("1 回の適用 = 1 コミット (git.commitEachApply /
     expect(output.join("")).toContain("コミットしていない適用はありません");
   });
 
-  it("設定が無効なら自動ではコミットしないが、tazuna commit は使える", async () => {
+  it("設定が無効なら自動ではコミットせず、tazuna commit が前回のコミットの後の適用をまとめて 1 コミットにする", async () => {
     const { root, drop } = setup({ commitEachApply: false });
     expect(await apply(root, drop, "c1.md", changes("一つ目", replace("a.txt", "one", "two")))).toBe(0);
     expect(await apply(root, drop, "c2.md", changes("二つ目", replace("a.txt", "two", "three")))).toBe(0);
+    expect(await apply(root, drop, "c3.md", changes("三つ目", replace("other.txt", "other", "other2")))).toBe(0);
     expect(log(root)).toEqual(["init"]);
     expect(output.join("")).not.toContain("コミットします");
+    const ids = listHistoryIds(root);
+    output = [];
+    expect(await commitCommand(["--root", root, "--dry-run"])).toBe(0);
+    expect(output.join("")).toContain(`履歴 ${ids[0]}〜${ids[2]} の 3 回分の 2 ファイル`);
+    expect(log(root)).toEqual(["init"]);
+    expect(await commitCommand(["--root", root])).toBe(0);
+    expect(log(root)).toEqual(["一つ目", "init"]);
+    expect(filesOf(root, "HEAD")).toEqual(["a.txt", "other.txt"]);
+    expect(git(root, "log", "-1", "--format=%B")).toBe(
+      doc(
+        "一つ目",
+        "",
+        "- 一つ目",
+        "- 二つ目",
+        "- 三つ目",
+        "",
+        ...ids.map((id) => `Tazuna-History: ${id}`),
+        "",
+        "",
+      ),
+    );
+    for (const id of ids) expect(readManifest(root, id)?.committed?.sha).toBe(git(root, "rev-parse", "HEAD").trim());
+    // コミット済みの回は undo しない
+    output = [];
+    expect(await undoCommand(["--root", root, "--yes"])).toBe(1);
+    expect(output.join("")).toContain("git revert");
+  });
+
+  it("-m で件名だけを替える。空なら止める", async () => {
+    const { root, drop } = setup({ commitEachApply: false });
+    expect(await apply(root, drop, "c1.md", changes("一つ目", replace("a.txt", "one", "two")))).toBe(0);
+    expect(await apply(root, drop, "c2.md", changes("二つ目", replace("other.txt", "other", "other2")))).toBe(0);
+    output = [];
+    expect(await commitCommand(["--root", root, "-m", "  "])).toBe(1);
+    expect(output.join("")).toContain("-m の件名が空です");
+    expect(await commitCommand(["--root", root, "-m", "受注一覧の絞り込み"])).toBe(0);
+    expect(log(root)).toEqual(["受注一覧の絞り込み", "init"]);
+    expect(git(root, "log", "-1", "--format=%B")).toContain("\n- 一つ目\n- 二つ目\n");
+  });
+
+  it("まとめるのは同じコミットの上で当てた分だけ (間に利用者がコミットした回・HEAD の記録がない回は含めない)", async () => {
+    const { root, drop } = setup({ commitEachApply: false });
+    expect(await apply(root, drop, "c1.md", changes("一つ目", replace("a.txt", "one", "two")))).toBe(0);
+    git(root, "commit", "-q", "-am", "自分でコミット");
+    expect(await apply(root, drop, "c2.md", changes("二つ目", replace("other.txt", "other", "other2")))).toBe(0);
+    expect(await apply(root, drop, "c3.md", changes("三つ目", replace("old.txt", "obsolete", "obsolete2")))).toBe(0);
+    // 0.23.0 より前の版で当てた履歴 (HEAD の記録がない) を真ん中に置く
+    const ids = listHistoryIds(root);
+    const middle = join(root, ".tazuna", "history", ids[1] as string, "manifest.json");
+    const manifest = JSON.parse(readFileSync(middle, "utf8")) as Record<string, unknown>;
+    delete manifest["gitHead"];
+    writeFileSync(middle, JSON.stringify(manifest));
+    writeFileSync(join(root, "a.txt"), "two (unrelated hand edit)\n");
+    expect(await commitCommand(["--root", root])).toBe(0);
+    expect(log(root)).toEqual(["三つ目", "自分でコミット", "init"]);
+    expect(filesOf(root, "HEAD")).toEqual(["old.txt"]);
+    expect(status(root)).toEqual([" M a.txt", " M other.txt"]);
+  });
+
+  it("どの回にも HEAD の記録がない (0.23.0 より前の版で当てた) なら、直近の 1 回だけをコミットする", async () => {
+    const { root, drop } = setup({ commitEachApply: false });
+    expect(await apply(root, drop, "c1.md", changes("一つ目", replace("a.txt", "one", "two")))).toBe(0);
+    expect(await apply(root, drop, "c2.md", changes("二つ目", replace("other.txt", "other", "other2")))).toBe(0);
+    for (const id of listHistoryIds(root)) {
+      const p = join(root, ".tazuna", "history", id, "manifest.json");
+      const manifest = JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>;
+      delete manifest["gitHead"];
+      writeFileSync(p, JSON.stringify(manifest));
+    }
     expect(await commitCommand(["--root", root])).toBe(0);
     expect(log(root)).toEqual(["二つ目", "init"]);
+    expect(filesOf(root, "HEAD")).toEqual(["other.txt"]);
   });
 
   it("前回の適用の後に利用者がコミットしていれば、自動ではコミットしない (手修正を前回のメッセージで入れない)", async () => {
