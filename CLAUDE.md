@@ -356,6 +356,13 @@ npm の tazuna は 2026-11-01 時点で空き。
   ブランチを変えた) 見送る。manifest のパスは invalidPathReason で検証する。コミットできなければ次を当てない
   (ApplyOutcomeKind "commit-failed"。watch は Downloads に残す)。コミット済みの履歴は undo しない (git revert を案内)。
   push・stash・ブランチ操作はしない (エージェントの領域に踏み込まない線引き)。テストは tests/commit.test.ts
+- 件名と差分の案内 (v0.24.0 / 2026-11-06、watch で開発を始めた利用者の「コミットメッセージを考えるのと、差分の見方で
+  迷う」から): ①規約文 v6 で概要の 1 行目を 40 文字以内の変更の要約 (「〜を追加」) にさせ、buildCommitMessage は
+  「**変更概要**」「変更概要: 」などの見出し (SUMMARY_LABEL) を件名から外す ②適用の結果の一覧にファイルごとの
+  増減の行数 (lineChangeLabel。core/diff.ts の countLineChanges) を出し、案内を「VS Code のソース管理、または tazuna show」に
+  ③Windows で vscodeCommand が既定の "code" なら show が既定のインストール先の Code.exe を探す (findWindowsVscode。
+  環境変数はドライブからの絶対パスだけ)。Code.exe は VS Code が開いていないと本体として動き続けるため、切り離して起動する
+  (launchDetached。待つと show が VS Code を閉じるまで終わらない)。Windows の実機では未確認。テストは tests/diff-guide.test.ts
 
 ### 伏せ字 [MASKED] の扱い (2026-10-31, v0.14.0)
 
@@ -619,6 +626,8 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   v0.22.1: 2026-11-04 changes.md で .git と状態ディレクトリを変更させない + git を読み取りだけで呼ぶ (セキュリティ修正)。
   2026-11-04 公開 /
   v0.23.0: 2026-11-05 1 回の適用 = 1 コミット (`tazuna commit` + `git.commitEachApply`。次の適用の直前に前回の分をコミット)。
+  2026-11-05 公開 /
+  v0.24.0: 2026-11-06 規約文 v6 (概要の 1 行目をコミットの件名に) + 適用の結果に増減の行数 + Windows の show が Code.exe を探す。
   リポジトリ: https://github.com/ishibashi0112/tazuna (旧 https://github.com/ishibashi0112/petari。GitHub が転送する)
   リリース手順: version を上げて `pnpm publish` (`prepublishOnly` が typecheck → test → build を実行。認証はユーザー)
 - **publish 事故と再発防止 (2026-09-14)**: v0.9.0 は `package.json` の version だけ 0.9.0 で、
