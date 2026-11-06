@@ -37,10 +37,15 @@ describe("適用の結果に添える増減の行数", () => {
     expect(countLineChanges(["a"], [])).toEqual({ added: 0, removed: 1 });
   });
 
-  it("差が大きく差分の計算を打ち切っても、全行の入れ替えとは数えない", () => {
+  it("差が大きく差分の計算を打ち切ったときは数えない (全行の入れ替え・並べ替えを 0 とは見せない)", () => {
     const a = Array.from({ length: 30_000 }, (_, i) => `line ${i}`);
     const b = a.map((l, i) => (i % 15 === 0 ? `${l} changed` : l));
-    expect(countLineChanges(a, b)).toEqual({ added: 2000, removed: 2000 });
+    expect(countLineChanges(a, b)).toBeNull();
+    expect(countLineChanges(a.slice(0, 3000), a.slice(0, 3000).reverse())).toBeNull();
+    expect(lineChangeLabel(bytes(a.join("\n")), bytes(b.join("\n")))).toBe("");
+    // 打ち切らない範囲 (差が 2000 行まで) は数える
+    const c = a.map((l, i) => (i % 30 === 0 ? `${l} changed` : l));
+    expect(countLineChanges(a, c)).toEqual({ added: 1000, removed: 1000 });
   });
 
   it("作成・削除・変更のどれでも表示し、読めないファイル (UTF-16) では付けない", () => {

@@ -87,13 +87,13 @@ function textLines(bytes: Uint8Array | null | undefined): string[] | null {
   }
 }
 
-/** 結果の一覧に添える増減の行数 (「 (+12 -3 行)」)。どちらかを読めなければ付けない */
+/** 結果の一覧に添える増減の行数 (「 (+12 -3 行)」)。どちらかを読めない・差が大きすぎて数えられなければ付けない */
 export function lineChangeLabel(before: Uint8Array | null | undefined, after: Uint8Array | null | undefined): string {
   const a = textLines(before);
   const b = textLines(after);
   if (a === null || b === null) return "";
-  const { added, removed } = countLineChanges(a, b);
-  return ` (+${added} -${removed} 行)`;
+  const counts = countLineChanges(a, b);
+  return counts === null ? "" : ` (+${counts.added} -${counts.removed} 行)`;
 }
 
 function printPreview(outcomes: FileOutcome[]): void {

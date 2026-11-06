@@ -15,30 +15,20 @@ const DEFAULT_MAX_D = 2000;
 
 /**
  * 行配列 a → b で足した行と消した行の数 (適用の結果の表示用)。
- * 差が大きく diffLines が全削除 + 全挿入に打ち切ったときは、行の内容ごとの数の差で数える
- * (行の並べ替えは数えないが、全行の入れ替えに見せるよりは実際に近い)
+ * 差が大きく diffLines が全削除 + 全挿入に打ち切ったときは null (全行の入れ替えと見せない。行の内容ごとの数の差でも
+ * 並べ替えを 0 と数えてしまうため、数えない)
  */
 export function countLineChanges(
   a: readonly string[],
   b: readonly string[],
-): { added: number; removed: number } {
+): { added: number; removed: number } | null {
   let added = 0;
   let removed = 0;
   for (const op of diffLines(a, b)) {
     if (op.kind === "ins") added++;
     else if (op.kind === "del") removed++;
   }
-  if (added + removed <= DEFAULT_MAX_D) return { added, removed };
-  const counts = new Map<string, number>();
-  for (const line of a) counts.set(line, (counts.get(line) ?? 0) + 1);
-  for (const line of b) counts.set(line, (counts.get(line) ?? 0) - 1);
-  let byContentAdded = 0;
-  let byContentRemoved = 0;
-  for (const n of counts.values()) {
-    if (n > 0) byContentRemoved += n;
-    else byContentAdded -= n;
-  }
-  return { added: byContentAdded, removed: byContentRemoved };
+  return added + removed <= DEFAULT_MAX_D ? { added, removed } : null;
 }
 
 /** 行配列 a → b の差分を返す。インデックスはともに 0-based */

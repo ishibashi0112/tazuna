@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { invalidPathReason } from "../core/applier.ts";
 import { buildBatchCommitMessage, buildCommitMessage, type CommitEntry } from "../core/commit-message.ts";
 import { parseChangesRecovering } from "../core/parser.ts";
-import { changedPathKeys, commitPaths, gitHeadCommit, type GitCommitResult } from "../infra/git.ts";
+import { changedPaths, commitPaths, gitHeadCommit, type GitCommitResult } from "../infra/git.ts";
 import { findUncommittedApplies, historyRoot, markCommitted } from "../infra/history.ts";
 
 export interface PendingCommit {
@@ -97,9 +97,9 @@ export function lookupPendingCommit(root: string, options: { requireSameHead: bo
   let used = applies;
   let dropped: string[] = [];
   if (applies.length > 1) {
-    const changed = changedPathKeys(root, [...new Set(applies.flatMap((a) => a.paths))]);
-    if (changed !== null) {
-      const contributing = applies.filter((a) => a.paths.some((p) => changed.has(p.toLowerCase())));
+    const isChanged = changedPaths(root, [...new Set(applies.flatMap((a) => a.paths))]);
+    if (isChanged !== null) {
+      const contributing = applies.filter((a) => a.paths.some(isChanged));
       if (contributing.length > 0 && contributing.length < applies.length) {
         used = contributing;
         dropped = applies.filter((a) => !contributing.includes(a)).map((a) => a.id);
