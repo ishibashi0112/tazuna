@@ -462,7 +462,7 @@ export async function runApply(argv: string[], detected?: DetectedChanges): Prom
       return;
     }
     const p = commitLookup.pending;
-    out(`コミット: 当てる前に、前回の適用 (履歴 ${p.id}・${p.paths.length} ファイル) を「${p.subject}」でコミットします`);
+    out(`コミット: 当てる前に、前回の適用 (${p.label}・${p.paths.length} ファイル) を「${p.subject}」でコミットします`);
   };
 
   if (values["dry-run"]) {
@@ -511,14 +511,14 @@ export async function runApply(argv: string[], detected?: DetectedChanges): Prom
     const p = commitLookup.pending;
     const r = commitPending(root, p, new Date());
     if (r.kind === "committed") {
-      out(`前回の適用 (履歴 ${p.id}) をコミットしました: ${shortSha(r.sha)} ${p.subject}`);
+      out(`前回の適用 (${p.label}) をコミットしました: ${shortSha(r.sha)} ${p.subject}`);
     } else if (r.kind === "nothing") {
-      out(`前回の適用 (履歴 ${p.id}) のファイルには変更が無いため、コミットしませんでした`);
+      out(`前回の適用 (${p.label}) のファイルには変更が無いため、コミットしませんでした`);
     } else if (r.kind === "not-repo") {
       err(`${TOOL_NAME}: 前回の適用をコミットできません (${r.message})。コミットせずに当てます`);
     } else {
       // 1 回 1 コミットを崩さないよう、前回の分をコミットできないうちは次を当てない
-      err(`${TOOL_NAME}: 前回の適用 (履歴 ${p.id}) をコミットできなかったため、この changes.md は当てていません:`);
+      err(`${TOOL_NAME}: 前回の適用 (${p.label}) をコミットできなかったため、この changes.md は当てていません:`);
       for (const line of r.message.split("\n")) err(`  ${line}`);
       err(`  git の問題を直してから、もう一度当ててください (前回の分だけを先にコミットするなら ${TOOL_NAME} commit)`);
       return done("commit-failed", 1);
