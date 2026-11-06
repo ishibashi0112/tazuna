@@ -126,11 +126,16 @@ export function listHistoryIds(root: string): string[] {
     .sort();
 }
 
-/** historyLimit を超えた古い履歴を削除する (§10)。null = 無制限 */
+/**
+ * historyLimit を超えた古い履歴を削除する (§10)。null = 無制限。
+ * まだコミットしていない適用 (tazuna commit がまとめる分。findUncommittedApplies) は、上限を超えてもコミットするまで
+ * 残す (消すと、その回で書いたファイルが tazuna commit から黙って漏れる)
+ */
 export function pruneHistory(root: string, limit: number | null): string[] {
   if (limit === null || limit < 1) return [];
   const ids = listHistoryIds(root);
-  const excess = ids.slice(0, Math.max(0, ids.length - limit));
+  const keep = new Set(findUncommittedApplies(root).map((f) => f.id));
+  const excess = ids.slice(0, Math.max(0, ids.length - limit)).filter((id) => !keep.has(id));
   for (const id of excess) {
     rmSync(join(historyRoot(root), id), { recursive: true, force: true });
   }

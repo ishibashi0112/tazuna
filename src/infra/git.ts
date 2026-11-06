@@ -102,6 +102,21 @@ function runGit(
 
 const nulList = (out: Buffer): string[] => out.toString("utf8").split("\0").filter((p) => p !== "");
 
+/** 存在しないディレクトリ (乱数入り)。フックの置き場に指定して、どのフックも見つからないようにする */
+const noHooksDirectory = (): string => join(tmpdir(), `${TOOL_NAME}-no-hooks-${randomBytes(8).toString("hex")}`);
+
+/** パスの照合用 (Windows・macOS の大文字小文字を区別しないファイルシステムで、git が実際の綴りで返すため) */
+const pathKey = (path: string): string => path.toLowerCase();
+
+/**
+ * git が返した一覧のうち、指定したファイルそのものだけ。manifest は非信頼入力で、`.` やディレクトリの名前を
+ * 書けば git はその下のファイルすべてに当てはめる (未追跡のものまで git add してしまう) ため、名前の一致で絞る
+ */
+function onlyNamed(listed: readonly string[], paths: readonly string[]): string[] {
+  const wanted = new Set(paths.map(pathKey));
+  return listed.filter((p) => wanted.has(pathKey(p)));
+}
+
 /** git の出力の先頭の数行 (失敗の理由として見せる) */
 const firstLines = (text: string, n = 8): string =>
   text
@@ -121,8 +136,7 @@ const firstLines = (text: string, n = 8): string =>
  */
 export function commitPaths(rootDir: string, paths: readonly string[], message: string): GitCommitResult {
   if (paths.length === 0) return { kind: "nothing" };
-  // 存在しないディレクトリ (乱数入り) をフックの置き場に指定して、どのフックも見つからないようにする
-  const noHooksDir = join(tmpdir(), `${TOOL_NAME}-no-hooks-${randomBytes(8).toString("hex")}`);
+  const noHooksDir = noHooksDirectory();
   const git = (args: readonly string[], input?: string) => runGit(rootDir, args, noHooksDir, input);
 
   const inside = git(["rev-parse", "--is-inside-work-tree"]);
@@ -141,8 +155,8 @@ export function commitPaths(rootDir: string, paths: readonly string[], message: 
   if (tracked.status !== 0 || untracked.status !== 0) {
     return { kind: "failed", message: firstLines(tracked.stderr || untracked.stderr) || "git ls-files に失敗しました" };
   }
-  const added = nulList(untracked.stdout);
-  const targets = [...new Set([...nulList(tracked.stdout), ...added])];
+  const added = onlyNamed(nulList(untracked.stdout), paths);
+  const targets = [...new Set([...onlyNamed(nulList(tracked.stdout), paths), ...added])];
   if (targets.length === 0) return { kind: "nothing" };
   if (added.length > 0) {
     const add = git(["add", "--", ...added]);
@@ -162,6 +176,29 @@ export function commitPaths(rootDir: string, paths: readonly string[], message: 
   }
   const head = git(["rev-parse", "HEAD"]);
   return { kind: "committed", sha: head.stdout.toString("utf8").trim(), files: targets };
+}
+
+/**
+ * 指定したファイルのうち、HEAD と内容の違うもの (未追跡で .gitignore に一致しないものを含む) の照合用の名前
+ * (小文字)。まとめてコミットするときに、git で元に戻した回を見分ける。git が無い・リポジトリでなければ null
+ */
+export function changedPathKeys(rootDir: string, paths: readonly string[]): Set<string> | null {
+  if (paths.length === 0) return new Set();
+  const status = runGit(rootDir, ["status", "--porcelain", "-z", "--", ...paths], noHooksDirectory());
+  if (status.error !== undefined || status.status !== 0) return null;
+  const changed = new Set<string>();
+  const entries = nulList(status.stdout);
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i] as string;
+    changed.add(pathKey(entry.slice(3)));
+    // 名前の変更 (R) と写し (C) は、次の項目が元の名前
+    if (entry[0] === "R" || entry[0] === "C") {
+      const from = entries[i + 1];
+      if (from !== undefined) changed.add(pathKey(from));
+      i++;
+    }
+  }
+  return changed;
 }
 
 /**

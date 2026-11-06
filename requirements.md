@@ -336,7 +336,11 @@ Ctrl+C で終了する。
   (間に利用者がコミットした・ブランチを変えた)・HEAD の記録がない (0.23.0 より前の版・git の外) 履歴の手前で止める
   (直近の 1 回は記録がなくても含める)。記録がない古い履歴まで遡ると、とうにコミットしたファイルの、関係のない
   今の手修正を入れてしまうため。件名は最初の回の件名、本文は各回の件名の箇条書き、末尾に各回の
-  `Tazuna-History:` トレーラー。コミットしたら各回の manifest に `committed` を記録する
+  `Tazuna-History:` トレーラー。コミットしたら各回の manifest に `committed` を記録する。
+  書いたファイルがどれも HEAD と同じ回(git で元に戻した。`git status` で見分ける)は、2 回以上のときに限り
+  件名・本文・トレーラー・対象のファイルから外す(取り消した回の件名をコミットに付けない。どの回も同じならそのまま。
+  外した回は `committed` を記録しない)。対象のファイルは manifest のパスと名前が一致するものだけ(`.` や
+  ディレクトリの名前を書いた manifest で、その下の未追跡のファイルまで `git add` しない。大文字小文字は区別しない)
 - 設定 `git.commitEachApply`(既定 false): 有効なら、changes.md を当てる**直前に**前回の適用の分を自動で
   コミットする(当てた直後ではない。git diff に「最後に当てた分と、その後の手修正」だけを残し、確かめてから
   ビルドする流れを変えないため)。適用の結果の最後と `--dry-run`・確認の一覧に、次のコミットの件名を出す。
@@ -559,7 +563,7 @@ AI チャットへの貼り返しが 1 ペーストで済む。config で無効�
 {
   "downloadsDir": null,          // null = OS 既定を自動解決
   "newFile": { "encoding": "auto" },  // "utf8" | "shift_jis" | "auto"(§8)。eol / bom は任意
-  "historyLimit": null,          // 履歴の保持件数上限(null = 無制限)
+  "historyLimit": null,          // 履歴の保持件数上限(null = 無制限。まだコミットしていない分は残す §4.8)
   "vscodeCommand": "code",       // show で使うコマンド
   "clipReportOnFailure": true,   // 失敗レポートをクリップボードへ自動コピー(§7)
   "vbproj": { "register": true }, // create した .vb / .cs の .vbproj / .csproj 自動登録(§3.2.1)

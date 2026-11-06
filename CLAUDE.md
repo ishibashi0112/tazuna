@@ -368,7 +368,12 @@ npm の tazuna は 2026-11-01 時点で空き。
   HEAD が違う・HEAD の記録がない履歴の手前で止める。記録のない古い履歴まで遡ると、とうにコミットしたファイルの関係のない
   手修正を入れるため)。commit-apply.ts の PendingCommit は ids / label を持ち、buildBatchCommitMessage (件名は最初の回、本文は
   各回の件名の箇条書き、トレーラーは各回) でまとめる。`tazuna commit -m` は withSubject で件名だけを替える。自動のコミット
-  (commitEachApply) も同じ探し方 (設定ありなら前の回はコミット済みなので 1 回分になる)
+  (commitEachApply) も同じ探し方 (設定ありなら前の回はコミット済みなので 1 回分になる)。
+  公開前の別視点のレビューで直したもの: 書いたファイルがどれも HEAD と同じ回 (VS Code の「変更を破棄」で戻した) は
+  2 回以上のときに外す (infra/git.ts の changedPathKeys。外さないと取り消した回の件名がコミットの件名になり、設定ありでは
+  "nothing" の回が次の回とまとまった)。commitPaths は git の一覧を manifest のパスと名前の一致で絞る (onlyNamed。manifest に
+  `.` を書くと未追跡のファイルまで git add した。0.23.0 から)。pruneHistory はまだコミットしていない回を消さない。
+  countLineChanges は diffLines が打ち切ったとき行の内容ごとの数の差で数える
 
 ### 伏せ字 [MASKED] の扱い (2026-10-31, v0.14.0)
 

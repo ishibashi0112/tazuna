@@ -37,6 +37,12 @@ describe("適用の結果に添える増減の行数", () => {
     expect(countLineChanges(["a"], [])).toEqual({ added: 0, removed: 1 });
   });
 
+  it("差が大きく差分の計算を打ち切っても、全行の入れ替えとは数えない", () => {
+    const a = Array.from({ length: 30_000 }, (_, i) => `line ${i}`);
+    const b = a.map((l, i) => (i % 15 === 0 ? `${l} changed` : l));
+    expect(countLineChanges(a, b)).toEqual({ added: 2000, removed: 2000 });
+  });
+
   it("作成・削除・変更のどれでも表示し、読めないファイル (UTF-16) では付けない", () => {
     expect(lineChangeLabel(null, bytes("a\nb\n"))).toBe(" (+2 -0 行)");
     expect(lineChangeLabel(bytes("a\nb\n"), null)).toBe(" (+0 -2 行)");
