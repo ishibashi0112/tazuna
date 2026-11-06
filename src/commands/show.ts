@@ -12,7 +12,7 @@
  * 複数ファイルの履歴は VS Code 経路では一覧から選択させ (--file で直接指定も可)、
  * ブラウザ経路では全ファイルをまとめて表示する。
  */
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, win32 } from "node:path";
@@ -63,6 +63,62 @@ export function invalidVscodeCommandReason(cmd: string): string | null {
 function isCommandMissing(e: unknown): boolean {
   const code = (e as { code?: unknown } | null)?.code;
   return code === "ENOENT" || code === "EINVAL";
+}
+
+/**
+ * Windows で vscodeCommand が既定の "code" のとき、VS Code の既定のインストール先にある Code.exe (v0.24.0)。
+ * VS Code が PATH に置く code.cmd はシェル非経由で起動できないため、既定のままでは常にブラウザ表示になっていた。
+ * 探すのはユーザーごと (%LOCALAPPDATA%) とシステム全体 (%ProgramFiles%) のインストール先だけ。見つからなければ null
+ */
+export function findWindowsVscode(
+  env: NodeJS.ProcessEnv,
+  exists: (path: string) => boolean = existsSync,
+): string | null {
+  const candidates: Array<[string | undefined, string[]]> = [
+    [env["LOCALAPPDATA"], ["Programs", "Microsoft VS Code"]],
+    [env["ProgramFiles"], ["Microsoft VS Code"]],
+    [env["ProgramFiles(x86)"], ["Microsoft VS Code"]],
+  ];
+  for (const [base, rest] of candidates) {
+    // 環境変数がドライブからの絶対パスのときだけ (UNC・相対パスは使わない)
+    if (base === undefined || !/^[A-Za-z]:[\\/]/.test(base)) continue;
+    const path = win32.join(base, ...rest, "Code.exe");
+    if (exists(path)) return path;
+  }
+  return null;
+}
+
+/** 実際に起動する VS Code のコマンド。Windows で既定の "code" なら Code.exe を探す */
+export function resolveVscodeCommand(
+  configured: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (path: string) => boolean = existsSync,
+): string {
+  if (platform !== "win32" || configured !== "code") return configured;
+  return findWindowsVscode(env, exists) ?? configured;
+}
+
+/**
+ * Code.exe を直接起動するか。code.cmd (CLI) と違い、Code.exe は VS Code が開いていないとそのまま本体として
+ * 動き続けるため、終わりを待たずに切り離して起動する (待つと VS Code を閉じるまで show が終わらない)
+ */
+export function isVscodeExecutable(command: string): boolean {
+  return /(^|[\\/])code(?: - insiders)?\.exe$/i.test(command);
+}
+
+function launchDetached(command: string, args: string[]): Promise<void> {
+  const env = { ...process.env };
+  // VS Code の中から呼ばれたときに Code.exe が Node として動かないように
+  delete env["ELECTRON_RUN_AS_NODE"];
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { detached: true, stdio: "ignore", env });
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
+    });
+  });
 }
 
 /**
@@ -342,6 +398,7 @@ export async function showCommand(argv: string[]): Promise<number> {
       err(`${TOOL_NAME}: ${cmdReason}: ${config.vscodeCommand}`);
       return 1;
     }
+    const vscode = resolveVscodeCommand(config.vscodeCommand);
     let entry: ManifestFileEntry;
     if (fileEntry !== null) {
       entry = fileEntry;
@@ -363,24 +420,26 @@ export async function showCommand(argv: string[]): Promise<number> {
       err(`${TOOL_NAME}: ${pair.error}`);
       return 1;
     }
-    out(`${config.vscodeCommand} --diff で開きます: ${pair.title}`);
+    out(`${vscode} --diff で開きます: ${pair.title}`);
     try {
-      await execFileP(config.vscodeCommand, ["--diff", pair.left, pair.right]);
+      const args = ["--diff", pair.left, pair.right];
+      if (isVscodeExecutable(vscode)) await launchDetached(vscode, args);
+      else await execFileP(vscode, args);
       return 0;
     } catch (e) {
       if (!isCommandMissing(e)) {
-        err(`${TOOL_NAME}: ${config.vscodeCommand} の起動に失敗しました: ${e instanceof Error ? e.message : String(e)}`);
+        err(`${TOOL_NAME}: ${vscode} の起動に失敗しました: ${e instanceof Error ? e.message : String(e)}`);
         err(`  ${stateDirName(root)}/config.json の vscodeCommand を確認してください`);
         return 1;
       }
-      const hint = vscodeMissingHint(config.vscodeCommand, process.platform, stateDirName(root));
+      const hint = vscodeMissingHint(vscode, process.platform, stateDirName(root));
       if (values.edit) {
-        err(`${TOOL_NAME}: ${config.vscodeCommand} が見つからないため --edit は使えません`);
+        err(`${TOOL_NAME}: ${vscode} が見つからないため --edit は使えません`);
         if (hint !== null) err(hint);
         err("  差分は git で確認し、ファイルはエディタで直接修正してください");
         return 1;
       }
-      out(`${config.vscodeCommand} が見つからないためブラウザで表示します`);
+      out(`${vscode} が見つからないためブラウザで表示します`);
       if (hint !== null) out(hint);
       // フォールバック: 選択済みの 1 件ではなく全ファイルをまとめて表示する
       // (レポートはページ内ナビで全件を扱えるため)

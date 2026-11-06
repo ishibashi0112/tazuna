@@ -77,7 +77,7 @@ export function describeWatchResult(
       return {
         title: `✓ 適用 ${result.files} ファイル`,
         headline: `✓ 適用しました (${result.files} ファイル)`,
-        details: ["git diff で確認してからビルドしてください"],
+        details: [`差分を VS Code のソース管理か ${TOOL_NAME} show で確認してからビルドしてください`],
       };
     case "already-applied":
       return {

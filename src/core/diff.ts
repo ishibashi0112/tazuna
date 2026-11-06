@@ -13,6 +13,20 @@ export type DiffOp =
 
 const DEFAULT_MAX_D = 2000;
 
+/** 行配列 a → b で足した行と消した行の数 (適用の結果の表示用) */
+export function countLineChanges(
+  a: readonly string[],
+  b: readonly string[],
+): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+  for (const op of diffLines(a, b)) {
+    if (op.kind === "ins") added++;
+    else if (op.kind === "del") removed++;
+  }
+  return { added, removed };
+}
+
 /** 行配列 a → b の差分を返す。インデックスはともに 0-based */
 export function diffLines(
   a: readonly string[],

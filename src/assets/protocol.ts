@@ -9,7 +9,7 @@ import { TOOL_NAME } from "../brand.ts";
  * 制約: パックはこのテキストを <instruction>...</instruction> で囲んで出力へ連結するため、
  * 規約文に <instruction> という文字列を含めないこと。
  */
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 export const PROTOCOL_TEXT = `<!-- ${TOOL_NAME} protocol v${PROTOCOL_VERSION} -->
 # コード変更の出力規約 (changes.md)
@@ -30,7 +30,9 @@ export const PROTOCOL_TEXT = `<!-- ${TOOL_NAME} protocol v${PROTOCOL_VERSION} --
 \`\`\`
 ## CHANGES
 
-(変更概要 — 必須。何を・なぜ変えるかを簡潔に)
+(1 行目: 変更の要約 — 必須。40 文字以内の 1 行で、何を変えるかを「〜を追加」「〜を修正」のように書く。
+ 見出しや記号は付けない。ツールがコミットの件名に使う)
+(2 行目以降: なぜ・どのように変えるかを簡潔に)
 
 影響ファイル:
 - src/utils/date.ts
@@ -85,7 +87,7 @@ new code
 
 ## 出力前の自己チェック
 
-出力を確定する前に、次の 4 点を必ず確認してください。
+出力を確定する前に、次の 5 点を必ず確認してください。
 
 1. 出力は「## CHANGES」の行から始まっているか
 2. すべてのマーカー行が行頭にあり、綴りが正確か
@@ -93,16 +95,19 @@ new code
 3. 各 SEARCH の内容は、提供された現在のファイルからの正確なコピーか
    (記憶をもとに再構成していないか)
 4. 同じファイルの FILE セクションが重複していないか
+5. 「## CHANGES」の次の行が、40 文字以内の変更の要約になっているか
 `;
 
 /**
  * 過去に内蔵していた規約文の SHA-256 (改行を LF に揃え、末尾の改行を除いた UTF-8)。
  * 旧版 (`petari init`) が書き出した protocol.md に手を加えていないかの判定に使う (設計書 §25.3-1)。
- * 値は git の履歴の src/assets/protocol.ts から求めた。v5 は 1 行目のツール名を tazuna にしただけ (本文は v4 と同じ)
+ * 値は git の履歴の src/assets/protocol.ts から求めた。v5 は 1 行目のツール名を tazuna にしただけ (本文は v4 と同じ)。
+ * v6 は概要の 1 行目を変更の要約 (コミットの件名) にした (v0.24.0)
  */
 export const PAST_PROTOCOL_SHA256: ReadonlyArray<{ version: number; sha256: string }> = [
   { version: 1, sha256: "0efd7fc516de5c80023a2fde68af04cc697fd9d9fadf731d0c253e4dd1bd05f7" },
   { version: 2, sha256: "664657946d38c425fd4a513fd9f8d0837ed1712c0d11d9edecddb5a7ecc08492" },
   { version: 3, sha256: "0134cac4c56392a2f0e580184d1f5538b2dbb9f060534ab732b7f7fa0a7134e1" },
   { version: 4, sha256: "733c12c8fba036bf57844011a9cb78865d4de767d12feb6afd5721a774b63cb2" },
+  { version: 5, sha256: "bd90b0f0d9fae9064e0f7ea9e7ec359445447e611619ba513f43bbf0753ff904" },
 ];

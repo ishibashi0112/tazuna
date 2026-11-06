@@ -4,7 +4,7 @@
 コマンドラインツール tazuna の導入審査用の資料です。
 どのデータがどこへ出るか、ツールが何をして何をしないかを、コードで確かめられる形でまとめます。
 
-- 対象: tazuna 0.23.0(2026-11-05 時点)
+- 対象: tazuna 0.24.0(2026-11-06 時点)
 - ソース: <https://github.com/ishibashi0112/tazuna>
 - ライセンス: MIT
 - 以前の slnmix(パックを作る側)と petari(変更を当てる側)は、0.15.0 で 1 つのパッケージにまとめ、tazuna に
@@ -314,7 +314,7 @@ git は、下の表のコミットを除いて読み取りだけで使い、リ�
 | `git ls-files` / `git add` / `git status` / `git commit --only` | `tazuna commit` を実行したとき。設定の `git.commitEachApply` を有効にしたときは、次の changes.md を当てる直前 | 前回の適用で tazuna が書いたファイル(履歴に記録したもの。`.gitignore` で除外したものは除く)だけをコミットする。メッセージは changes.md の概要から作る。push・フック・ほかのファイルのステージはしない |
 | `vswhere.exe` / `MSBuild.exe` | `tazuna build` のときだけ | Visual Studio に付属する MSBuild を探してビルドする(`--msbuild` で場所を指定できる) |
 | `reg query` | 引数なしの `tazuna` / `tazuna watch` | ダウンロードフォルダの場所を調べる(OneDrive へのリダイレクト対応) |
-| `code --diff` | `tazuna show` | VS Code で差分を開く(コマンド名か絶対パスのみ許可) |
+| `code --diff` | `tazuna show` | VS Code で差分を開く(コマンド名か絶対パスのみ許可)。Windows で設定が既定の `code` のときは、VS Code の既定のインストール先(`%LOCALAPPDATA%\Programs\Microsoft VS Code` と `%ProgramFiles%` の下)にある `Code.exe` を起動する(0.24.0。ドライブからの絶対パスのときだけ。プロジェクトの中のファイルは使わない) |
 | `Start-Process` / `open` / `xdg-open` | `tazuna show` で VS Code が無いとき | 差分レポートを既定のブラウザで開く |
 
 PowerShell の実行が制限されている環境では、クリップボードへのコピーが警告付きで失敗します。

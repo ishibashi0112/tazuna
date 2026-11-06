@@ -103,12 +103,22 @@ describe.skipIf(process.platform === "win32")("グローバル設定の旧名", 
 
 describe("規約文の旧名", () => {
   it("v5 は 1 行目のツール名を変えただけ (旧 init が書いた v4 は手を加えていなければ内蔵の第 4 版)", () => {
-    expect(PROTOCOL_VERSION).toBe(5);
-    expect(PROTOCOL_TEXT.startsWith("<!-- tazuna protocol v5 -->\n")).toBe(true);
-    const v4 = PROTOCOL_TEXT.replace("<!-- tazuna protocol v5 -->", "<!-- petari protocol v4 -->");
+    expect(PROTOCOL_VERSION).toBe(6);
+    expect(PROTOCOL_TEXT.startsWith("<!-- tazuna protocol v6 -->\n")).toBe(true);
+    // v6 で変えたところ (概要の 1 行目を変更の要約にした) を戻すと v5
+    const v5 = PROTOCOL_TEXT.replace("<!-- tazuna protocol v6 -->", "<!-- tazuna protocol v5 -->")
+      .replace(
+        "(1 行目: 変更の要約 — 必須。40 文字以内の 1 行で、何を変えるかを「〜を追加」「〜を修正」のように書く。\n" +
+          " 見出しや記号は付けない。ツールがコミットの件名に使う)\n(2 行目以降: なぜ・どのように変えるかを簡潔に)",
+        "(変更概要 — 必須。何を・なぜ変えるかを簡潔に)",
+      )
+      .replace("次の 5 点を必ず確認", "次の 4 点を必ず確認")
+      .replace("5. 「## CHANGES」の次の行が、40 文字以内の変更の要約になっているか\n", "");
+    expect(builtinProtocolVersionOf(v5)).toBe(5);
+    const v4 = v5.replace("<!-- tazuna protocol v5 -->", "<!-- petari protocol v4 -->");
     expect(builtinProtocolVersionOf(v4)).toBe(4);
     expect(builtinProtocolVersionOf(v4.replace(/\n/g, "\r\n"))).toBe(4);
-    expect(builtinProtocolVersionOf(PROTOCOL_TEXT)).toBe(5);
+    expect(builtinProtocolVersionOf(PROTOCOL_TEXT)).toBe(6);
   });
 
   it("1 行目の版は新旧どちらの名前でも読む", () => {

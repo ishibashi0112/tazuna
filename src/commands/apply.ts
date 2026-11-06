@@ -16,6 +16,8 @@ import {
   type Plan,
 } from "../core/applier.ts";
 import { buildCommitMessage } from "../core/commit-message.ts";
+import { countLineChanges } from "../core/diff.ts";
+import { decodeFile } from "../core/encoding.ts";
 import { changeSetFingerprint } from "../core/fingerprint.ts";
 import { fileNameKey, looksLikeOtherRepository } from "../core/other-repo.ts";
 import { PRESENCE_STAGE_LABEL } from "../core/matcher.ts";
@@ -73,6 +75,25 @@ function opLabel(o: FileOutcome): string {
   }
   const label = `${c.op.padEnd(7)} ${c.path}`;
   return o.alreadyApplied ? `${label} — 適用済み (スキップ)` : label;
+}
+
+/** バイト列の行 (書き込まない・無いファイルは空)。読めなければ null */
+function textLines(bytes: Uint8Array | null | undefined): string[] | null {
+  if (bytes === null || bytes === undefined) return [];
+  try {
+    return decodeFile(bytes).lines.map((l) => l.text);
+  } catch {
+    return null;
+  }
+}
+
+/** 結果の一覧に添える増減の行数 (「 (+12 -3 行)」)。どちらかを読めなければ付けない */
+export function lineChangeLabel(before: Uint8Array | null | undefined, after: Uint8Array | null | undefined): string {
+  const a = textLines(before);
+  const b = textLines(after);
+  if (a === null || b === null) return "";
+  const { added, removed } = countLineChanges(a, b);
+  return ` (+${added} -${removed} 行)`;
 }
 
 function printPreview(outcomes: FileOutcome[]): void {
@@ -594,7 +615,10 @@ export async function runApply(argv: string[], detected?: DetectedChanges): Prom
   // 5. サマリ (§4.1 手順 5)
   out("");
   out(`適用しました (履歴 ID: ${id})`);
-  for (const o of applicable) out(`  ${opLabel(o)}`);
+  for (const o of applicable) {
+    const path = o.change.path;
+    out(`  ${opLabel(o)}${lineChangeLabel(states.get(path)?.bytes, after.get(path))}`);
+  }
   printExtras();
   printAlreadyApplied(plan.outcomes);
   const appliedNote = buildBlankInsensitiveNote(plan.outcomes);
@@ -623,7 +647,10 @@ export async function runApply(argv: string[], detected?: DetectedChanges): Prom
   }
 
   out("");
-  out(`git diff で差分を確認してください。巻き戻しは \`${TOOL_NAME} undo\` です。`);
+  out(
+    `差分を確認してからビルドしてください (VS Code のソース管理、または \`${TOOL_NAME} show\`)。` +
+      `巻き戻しは \`${TOOL_NAME} undo\` です。`,
+  );
   if (config.git.commitEachApply) {
     const next = buildCommitMessage(changeSet.header, id, applicable.length);
     out(
