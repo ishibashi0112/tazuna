@@ -311,7 +311,7 @@ git は、下の表のコミットを除いて読み取りだけで使い、リ�
 | `git ls-files` | `tazuna pack` で、VB.NET 以外の構成に `extraRoots` を書いていないとき。適用で、changes.md の対象のファイルがどれもプロジェクトに無いとき | パックに入れるファイルの一覧を得る。適用では、同じ名前のファイルがあるかで別のリポジトリ向けの changes.md かを見分ける(読み取りだけ) |
 | `git status --porcelain` | 適用の前 | 未コミットの変更があれば警告する(読み取りだけ) |
 | `git rev-parse` | 適用のたび | 適用したときの HEAD を履歴に記録する(後で利用者が自分でコミットしたかを見分けるため。読み取りだけ) |
-| `git ls-files` / `git add` / `git status` / `git commit --only` | `tazuna commit` を実行したとき。設定の `git.commitEachApply` を有効にしたときは、次の changes.md を当てる直前 | 前回のコミットの後の適用で tazuna が書いたファイル(履歴に記録したもの。`.gitignore` で除外したものは除く)だけをコミットする(複数回分は 1 つにまとめる。0.25.0)。メッセージは changes.md の概要から作る。push・フック・ほかのファイルのステージはしない |
+| `git ls-files` / `git add` / `git status` / `git commit --only` | `tazuna commit` を実行したとき。設定の `git.commitEachApply` を有効にしたときは、次の changes.md を当てる直前 | 前回のコミットの後の適用で tazuna が書いたファイル(履歴に記録したもの。`.gitignore` で除外したものは除く)だけをコミットする(複数回分は 1 つにまとめる。0.25.0)。git が返した一覧は履歴のパスと名前が一致するものだけに絞る(履歴に `.` やフォルダの名前が書かれていても、その下のファイルを入れない)。メッセージは changes.md の概要から作る。push・フック・ほかのファイルのステージはしない |
 | `vswhere.exe` / `MSBuild.exe` | `tazuna build` のときだけ | Visual Studio に付属する MSBuild を探してビルドする(`--msbuild` で場所を指定できる) |
 | `reg query` | 引数なしの `tazuna` / `tazuna watch` | ダウンロードフォルダの場所を調べる(OneDrive へのリダイレクト対応) |
 | `code --diff` | `tazuna show` | VS Code で差分を開く(コマンド名か絶対パスのみ許可)。Windows で設定が既定の `code` のときは、VS Code の既定のインストール先(`%LOCALAPPDATA%\Programs\Microsoft VS Code` と `%ProgramFiles%` の下)にある `Code.exe` を起動する(0.24.0。ドライブからの絶対パスのときだけ。プロジェクトの中のファイルは使わない) |

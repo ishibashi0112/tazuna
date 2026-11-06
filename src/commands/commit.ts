@@ -43,8 +43,11 @@ export async function commitCommand(argv: string[]): Promise<number> {
     }
     pending = { ...pending, ...replaced };
   }
+  if (pending.dropped.length > 0) {
+    out(`書いたファイルを git で元に戻した回は含めません: 履歴 ${pending.dropped.join("・")}`);
+  }
   if (values["dry-run"]) {
-    out(`dry-run: ${pending.label}の ${pending.paths.length} ファイルを、次のメッセージでコミットします (コミットはしていません)`);
+    out(`dry-run: ${pending.label}・${pending.paths.length} ファイルを、次のメッセージでコミットします (コミットはしていません)`);
     if (pending.ids.length > 1) {
       for (const [i, id] of pending.ids.entries()) out(`  ${id}  ${pending.subjects[i] ?? ""}`);
     }
@@ -62,7 +65,7 @@ export async function commitCommand(argv: string[]): Promise<number> {
       out("push はしていません。共有するときはご自身で push してください");
       return 0;
     case "nothing":
-      out(`${pending.label}のファイルには、コミットする変更がありません (コミット済みか、元に戻されています)`);
+      out(`${pending.label} のファイルには、コミットする変更がありません (コミット済みか、元に戻されています)`);
       return 0;
     case "not-repo":
       err(`${TOOL_NAME}: コミットできません: ${result.message}`);

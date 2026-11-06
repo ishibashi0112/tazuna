@@ -1,7 +1,7 @@
 import { execFile, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { promisify } from "node:util";
 import { TOOL_NAME } from "../brand.ts";
 
@@ -102,6 +102,26 @@ function runGit(
 
 const nulList = (out: Buffer): string[] => out.toString("utf8").split("\0").filter((p) => p !== "");
 
+/** 存在しないディレクトリ (乱数入り)。フックの置き場に指定して、どのフックも見つからないようにする */
+const noHooksDirectory = (): string => join(tmpdir(), `${TOOL_NAME}-no-hooks-${randomBytes(8).toString("hex")}`);
+
+/**
+ * manifest のパスを git が返す形にそろえる (changes.md に `./a.txt`・`sub//a.txt` と書かれていても、git は `a.txt`・
+ * `sub/a.txt` と返す)
+ */
+const gitPathName = (path: string): string => posix.normalize(path);
+
+/**
+ * git が返した一覧のうち、指定したファイルそのものだけ。manifest は非信頼入力で、`.` やディレクトリの名前を
+ * 書けば git はその下のファイルすべてに当てはめる (未追跡のものまで git add してしまう) ため、名前の一致で絞る。
+ * 大文字小文字は、リポジトリが区別しない (core.ignorecase。Windows・macOS の既定) ときだけ同一視する
+ */
+function onlyNamed(listed: readonly string[], paths: readonly string[], ignoreCase: boolean): string[] {
+  const key = (p: string): string => (ignoreCase ? p.toLowerCase() : p);
+  const wanted = new Set(paths.map((p) => key(gitPathName(p))));
+  return listed.filter((p) => wanted.has(key(p)));
+}
+
 /** git の出力の先頭の数行 (失敗の理由として見せる) */
 const firstLines = (text: string, n = 8): string =>
   text
@@ -121,8 +141,7 @@ const firstLines = (text: string, n = 8): string =>
  */
 export function commitPaths(rootDir: string, paths: readonly string[], message: string): GitCommitResult {
   if (paths.length === 0) return { kind: "nothing" };
-  // 存在しないディレクトリ (乱数入り) をフックの置き場に指定して、どのフックも見つからないようにする
-  const noHooksDir = join(tmpdir(), `${TOOL_NAME}-no-hooks-${randomBytes(8).toString("hex")}`);
+  const noHooksDir = noHooksDirectory();
   const git = (args: readonly string[], input?: string) => runGit(rootDir, args, noHooksDir, input);
 
   const inside = git(["rev-parse", "--is-inside-work-tree"]);
@@ -141,8 +160,9 @@ export function commitPaths(rootDir: string, paths: readonly string[], message: 
   if (tracked.status !== 0 || untracked.status !== 0) {
     return { kind: "failed", message: firstLines(tracked.stderr || untracked.stderr) || "git ls-files に失敗しました" };
   }
-  const added = nulList(untracked.stdout);
-  const targets = [...new Set([...nulList(tracked.stdout), ...added])];
+  const ignoreCase = git(["config", "--bool", "core.ignorecase"]).stdout.toString("utf8").trim() === "true";
+  const added = onlyNamed(nulList(untracked.stdout), paths, ignoreCase);
+  const targets = [...new Set([...onlyNamed(nulList(tracked.stdout), paths, ignoreCase), ...added])];
   if (targets.length === 0) return { kind: "nothing" };
   if (added.length > 0) {
     const add = git(["add", "--", ...added]);
@@ -162,6 +182,40 @@ export function commitPaths(rootDir: string, paths: readonly string[], message: 
   }
   const head = git(["rev-parse", "HEAD"]);
   return { kind: "committed", sha: head.stdout.toString("utf8").trim(), files: targets };
+}
+
+/**
+ * 指定したファイルのうち、HEAD と内容の違うもの (未追跡で .gitignore に一致しないものを含む) を見分ける関数。
+ * まとめてコミットするときに、git で元に戻した回を見分ける。git が無い・リポジトリでなければ null。
+ * 大文字小文字は区別しない (違うと見る側に倒れるだけ = 回を外さない)
+ */
+export function changedPaths(rootDir: string, paths: readonly string[]): ((path: string) => boolean) | null {
+  const key = (p: string): string => gitPathName(p).toLowerCase();
+  if (paths.length === 0) return () => false;
+  const noHooksDir = noHooksDirectory();
+  // git status はリポジトリの最上位からのパスで返すので、ルートがその下のフォルダならその分を外す
+  const prefix = runGit(rootDir, ["rev-parse", "--show-prefix"], noHooksDir);
+  if (prefix.error !== undefined || prefix.status !== 0) return null;
+  const base = prefix.stdout.toString("utf8").trim();
+  // --untracked-files=all: 利用者の設定 (status.showUntrackedFiles=no など) によらず、作ったファイルも見る
+  const status = runGit(rootDir, ["status", "--porcelain", "-z", "--untracked-files=all", "--", ...paths], noHooksDir);
+  if (status.error !== undefined || status.status !== 0) return null;
+  const changed = new Set<string>();
+  const add = (fromTop: string): void => {
+    if (fromTop.startsWith(base)) changed.add(key(fromTop.slice(base.length)));
+  };
+  const entries = nulList(status.stdout);
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i] as string;
+    add(entry.slice(3));
+    // 名前の変更 (R) と写し (C) は、次の項目が元の名前 (索引側・作業ツリー側のどちらの欄でも)
+    if (/[RC]/.test(entry.slice(0, 2))) {
+      const from = entries[i + 1];
+      if (from !== undefined) add(from);
+      i++;
+    }
+  }
+  return (path) => changed.has(key(path));
 }
 
 /**

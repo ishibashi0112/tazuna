@@ -204,7 +204,7 @@ describe.skipIf(!hasGit)("1 回の適用 = 1 コミット (git.commitEachApply /
     const ids = listHistoryIds(root);
     output = [];
     expect(await commitCommand(["--root", root, "--dry-run"])).toBe(0);
-    expect(output.join("")).toContain(`履歴 ${ids[0]}〜${ids[2]} の 3 回分の 2 ファイル`);
+    expect(output.join("")).toContain(`履歴 ${ids[0]}〜${ids[2]} の 3 回分・2 ファイル`);
     expect(log(root)).toEqual(["init"]);
     expect(await commitCommand(["--root", root])).toBe(0);
     expect(log(root)).toEqual(["一つ目", "init"]);
@@ -351,6 +351,126 @@ describe.skipIf(!hasGit)("1 回の適用 = 1 コミット (git.commitEachApply /
     const sha = git(root, "rev-parse", "--short=7", "HEAD").trim();
     expect(output.join("")).toContain(`git revert ${sha}`);
     expect(readFileSync(join(root, "a.txt"), "utf8")).toBe("two\n");
+  });
+
+  it("git で元に戻した回 (書いたファイルがどれも HEAD と同じ) は、まとめるコミットに含めない", async () => {
+    const { root, drop } = setup({ commitEachApply: false });
+    expect(await apply(root, drop, "c1.md", changes("捨てた変更", replace("a.txt", "one", "two")))).toBe(0);
+    git(root, "checkout", "--", "a.txt");
+    expect(await apply(root, drop, "c2.md", changes("本当の変更", replace("other.txt", "other", "other2")))).toBe(0);
+    expect(await apply(root, drop, "c3.md", changes("続きの変更", replace("other.txt", "other2", "other3")))).toBe(0);
+    const ids = listHistoryIds(root);
+    output = [];
+    expect(await commitCommand(["--root", root])).toBe(0);
+    expect(output.join("")).toContain(`git で元に戻した回は含めません: 履歴 ${ids[0]}`);
+    expect(log(root)).toEqual(["本当の変更", "init"]);
+    expect(filesOf(root, "HEAD")).toEqual(["other.txt"]);
+    const body = git(root, "log", "-1", "--format=%B");
+    expect(body).not.toContain("捨てた変更");
+    expect(body).not.toContain(`Tazuna-History: ${ids[0]}\n`);
+    expect(body).toContain("- 本当の変更\n- 続きの変更\n");
+  });
+
+  it("設定ありでも、git で元に戻した前回の分を次のコミットに混ぜない", async () => {
+    const { root, drop } = setup();
+    expect(await apply(root, drop, "c1.md", changes("捨てた変更", replace("a.txt", "one", "two")))).toBe(0);
+    git(root, "checkout", "--", "a.txt");
+    // 前回の分は変更が無いのでコミットしない
+    expect(await apply(root, drop, "c2.md", changes("二つ目", replace("other.txt", "other", "other2")))).toBe(0);
+    expect(log(root)).toEqual(["init"]);
+    expect(await apply(root, drop, "c3.md", changes("三つ目", replace("old.txt", "obsolete", "obsolete2")))).toBe(0);
+    expect(log(root)).toEqual(["二つ目", "init"]);
+    expect(filesOf(root, "HEAD")).toEqual(["other.txt"]);
+    expect(git(root, "log", "-1", "--format=%B")).not.toContain("捨てた変更");
+  });
+
+  it("manifest のパスが . やディレクトリでも、その下のほかのファイルはコミットしない", async () => {
+    const { root, drop } = setup({ commitEachApply: false });
+    mkdirSync(join(root, "sub"));
+    writeFileSync(join(root, "sub", "x.txt"), "x\n");
+    expect(await apply(root, drop, "c1.md", changes("一つ目", replace("a.txt", "one", "two")))).toBe(0);
+    const id = listHistoryIds(root)[0] as string;
+    const p = join(root, ".tazuna", "history", id, "manifest.json");
+    const manifest = JSON.parse(readFileSync(p, "utf8")) as { files: unknown[] };
+    manifest.files.push({ path: ".", op: "replace", applied: true }, { path: "sub", op: "replace", applied: true });
+    writeFileSync(p, JSON.stringify(manifest));
+    writeFileSync(join(root, "secret.env"), "TOKEN=abc\n");
+    writeFileSync(join(root, "other.txt"), "hand edit\n");
+    expect(await commitCommand(["--root", root])).toBe(0);
+    expect(filesOf(root, "HEAD")).toEqual(["a.txt"]);
+    expect(status(root)).toEqual([" M other.txt", "?? secret.env", "?? sub/"].sort());
+  });
+
+  it("changes.md のパスが ./a.txt でもコミットする (git の返す名前とそろえる)", async () => {
+    const { root, drop } = setup({ commitEachApply: false });
+    expect(await apply(root, drop, "c1.md", changes("一つ目", replace("./a.txt", "one", "two")))).toBe(0);
+    expect(await commitCommand(["--root", root])).toBe(0);
+    expect(filesOf(root, "HEAD")).toEqual(["a.txt"]);
+    expect(await apply(root, drop, "c2.md", changes("二つ目", replace("./other.txt", "other", "other2")))).toBe(0);
+    expect(await apply(root, drop, "c3.md", changes("三つ目", replace("old.txt", "obsolete", "obsolete2")))).toBe(0);
+    expect(await commitCommand(["--root", root])).toBe(0);
+    expect(log(root)).toEqual(["二つ目", "一つ目", "init"]);
+    expect(filesOf(root, "HEAD")).toEqual(["old.txt", "other.txt"]);
+  });
+
+  it("未追跡のファイルを表示しない git の設定でも、作っただけの回を外さない", async () => {
+    const { root, drop } = setup({ commitEachApply: false });
+    git(root, "config", "status.showUntrackedFiles", "no");
+    const create = doc("### FILE: new.txt (create)", "<<<<<<< CONTENT", "new", ">>>>>>> END", "");
+    expect(await apply(root, drop, "c1.md", changes("作る", create))).toBe(0);
+    expect(await apply(root, drop, "c2.md", changes("直す", replace("a.txt", "one", "two")))).toBe(0);
+    expect(await commitCommand(["--root", root])).toBe(0);
+    expect(log(root)).toEqual(["作る", "init"]);
+    expect(filesOf(root, "HEAD")).toEqual(["a.txt", "new.txt"]);
+  });
+
+  it("ルートがリポジトリの中のフォルダでも、git で元に戻した回を外す", async () => {
+    const { root: repo, drop } = setup({ commitEachApply: false });
+    const root = join(repo, "app");
+    mkdirSync(join(root, ".tazuna"), { recursive: true });
+    writeFileSync(join(root, ".tazuna", "config.json"), JSON.stringify({ clipReportOnFailure: false }));
+    writeFileSync(join(root, "a.txt"), "one\n");
+    writeFileSync(join(root, "b.txt"), "bee\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-q", "-m", "app");
+    expect(await apply(root, drop, "c1.md", changes("捨てた変更", replace("a.txt", "one", "two")))).toBe(0);
+    git(root, "checkout", "--", "a.txt");
+    expect(await apply(root, drop, "c2.md", changes("本当の変更", replace("b.txt", "bee", "bee2")))).toBe(0);
+    expect(await commitCommand(["--root", root])).toBe(0);
+    expect(log(repo)).toEqual(["本当の変更", "app", "init"]);
+    expect(filesOf(repo, "HEAD")).toEqual(["app/b.txt"]);
+  });
+
+  it("大文字小文字を区別するリポジトリでは、manifest の名前と綴りの違うファイルを入れない", async () => {
+    const { root, drop } = setup({ commitEachApply: false });
+    git(root, "config", "core.ignorecase", "false");
+    expect(await apply(root, drop, "c1.md", changes("一つ目", replace("a.txt", "one", "two")))).toBe(0);
+    const id = listHistoryIds(root)[0] as string;
+    const p = join(root, ".tazuna", "history", id, "manifest.json");
+    const manifest = JSON.parse(readFileSync(p, "utf8")) as { files: unknown[] };
+    manifest.files.push({ path: ".", op: "replace", applied: true });
+    writeFileSync(p, JSON.stringify(manifest));
+    writeFileSync(join(root, "A.TXT"), "other file\n");
+    expect(await commitCommand(["--root", root])).toBe(0);
+    expect(filesOf(root, "HEAD")).toEqual(["a.txt"]);
+  });
+
+  it("historyLimit を超えても、まだコミットしていない回の履歴は消さない (まとめるコミットから漏らさない)", async () => {
+    const { root, drop } = setup({ commitEachApply: false });
+    writeFileSync(
+      join(root, ".tazuna", "config.json"),
+      JSON.stringify({ clipReportOnFailure: false, historyLimit: 2, git: { commitEachApply: false } }),
+    );
+    expect(await apply(root, drop, "c1.md", changes("一つ目", replace("a.txt", "one", "two")))).toBe(0);
+    expect(await apply(root, drop, "c2.md", changes("二つ目", replace("other.txt", "other", "other2")))).toBe(0);
+    expect(await apply(root, drop, "c3.md", changes("三つ目", replace("old.txt", "obsolete", "obsolete2")))).toBe(0);
+    expect(listHistoryIds(root)).toHaveLength(3);
+    expect(await commitCommand(["--root", root])).toBe(0);
+    expect(log(root)).toEqual(["一つ目", "init"]);
+    expect(filesOf(root, "HEAD")).toEqual(["a.txt", "old.txt", "other.txt"]);
+    // コミットした後の適用で、上限を超えた分を消す
+    expect(await apply(root, drop, "c4.md", changes("四つ目", replace("a.txt", "two", "three")))).toBe(0);
+    expect(listHistoryIds(root)).toHaveLength(2);
   });
 
   it("git のリポジトリでなければ、コミットせずに当てる", async () => {

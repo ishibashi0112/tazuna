@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { invalidPathReason } from "../core/applier.ts";
 import { buildBatchCommitMessage, buildCommitMessage, type CommitEntry } from "../core/commit-message.ts";
 import { parseChangesRecovering } from "../core/parser.ts";
-import { commitPaths, gitHeadCommit, type GitCommitResult } from "../infra/git.ts";
+import { changedPaths, commitPaths, gitHeadCommit, type GitCommitResult } from "../infra/git.ts";
 import { findUncommittedApplies, historyRoot, markCommitted } from "../infra/history.ts";
 
 export interface PendingCommit {
@@ -28,6 +28,8 @@ export interface PendingCommit {
   message: string;
   /** 各回の件名 (古い順。dry-run の表示用) */
   subjects: string[];
+  /** 含めなかった回 (書いたファイルがどれも HEAD と同じ = git で元に戻した。古い順) */
+  dropped: string[];
 }
 
 export type PendingLookup =
@@ -52,6 +54,7 @@ const labelOf = (ids: readonly string[]): string =>
 /**
  * コミットしていない適用 (前回のコミットの後に、同じコミットの上で当てたもの。infra/history.ts の findUncommittedApplies)。
  * 2 回以上あれば 1 つのコミットにまとめる (設定なしで当て続けて、区切りで tazuna commit したとき)。
+ * そのうち、書いたファイルがどれも HEAD と同じ回 (git で元に戻した) は含めない (件名・本文・トレーラーにも)。
  * @param requireSameHead 次の適用の前の自動コミットでは true: 直近の適用のときから HEAD が動いていれば、
  *   利用者が自分でコミットした (または ブランチを切り替えた) とみなしてコミットしない。tazuna commit は false
  */
@@ -59,21 +62,18 @@ export function lookupPendingCommit(root: string, options: { requireSameHead: bo
   const found = findUncommittedApplies(root);
   const newest = found[found.length - 1];
   if (newest === undefined) return { kind: "none" };
-  const ids = found.map((f) => f.id);
-  const paths: string[] = [];
-  const entries: CommitEntry[] = [];
+  const applies: Array<{ id: string; paths: string[] }> = [];
   for (const { id, manifest } of found) {
-    let count = 0;
+    const paths: string[] = [];
     for (const f of manifest.files) {
       if (f?.applied !== true) continue;
       // manifest は非信頼入力。apply と同じパスの検証を通らないものがあればコミットしない
       if (typeof f.path !== "string" || invalidPathReason(f.path) !== null) {
         return { kind: "skip", id, reason: `履歴 ${id} の manifest に不正なパスがあるため、コミットしません` };
       }
-      count++;
-      if (!paths.includes(f.path)) paths.push(f.path);
+      paths.push(f.path);
     }
-    entries.push({ header: savedSummary(root, id), historyId: id, fileCount: count });
+    applies.push({ id, paths });
   }
   if (options.requireSameHead) {
     if (newest.manifest.gitHead === undefined) {
@@ -92,9 +92,30 @@ export function lookupPendingCommit(root: string, options: { requireSameHead: bo
       };
     }
   }
+  // 書いたファイルがどれも HEAD と同じ回 (VS Code の「変更を破棄」や git checkout で元に戻した) は含めない。
+  // 含めると、取り消した回の件名がコミットの件名になる。どの回も同じなら、そのまま (コミットするものはない)
+  let used = applies;
+  let dropped: string[] = [];
+  if (applies.length > 1) {
+    const isChanged = changedPaths(root, [...new Set(applies.flatMap((a) => a.paths))]);
+    if (isChanged !== null) {
+      const contributing = applies.filter((a) => a.paths.some(isChanged));
+      if (contributing.length > 0 && contributing.length < applies.length) {
+        used = contributing;
+        dropped = applies.filter((a) => !contributing.includes(a)).map((a) => a.id);
+      }
+    }
+  }
+  const ids = used.map((a) => a.id);
+  const paths = [...new Set(used.flatMap((a) => a.paths))];
+  const entries: CommitEntry[] = used.map((a) => ({
+    header: savedSummary(root, a.id),
+    historyId: a.id,
+    fileCount: a.paths.length,
+  }));
   const { subject, message } = buildBatchCommitMessage(entries);
   const subjects = entries.map((e) => buildCommitMessage(e.header, e.historyId, e.fileCount).subject);
-  return { kind: "pending", pending: { ids, label: labelOf(ids), paths, subject, message, subjects } };
+  return { kind: "pending", pending: { ids, label: labelOf(ids), paths, subject, message, subjects, dropped } };
 }
 
 /** コミットし、できたら manifest に記録する */
