@@ -334,7 +334,8 @@ npm の tazuna は 2026-11-01 時点で空き。
   ものを状態ディレクトリの unapplied/ へ `YYYY-MM-DD_HHmmss_<元の名前>` で移す (rename、別ドライブなら写して元を消す。
   消せなければ写しを消して残す)。プロジェクト直下のものは動かさない (手で直しながら保存のたびに当て直す使い方を残す)。
   --dry-run では動かさない。移すのは結果を出してから 15 秒後 (WatchOptions.tidyDelayMs。テストは 0)、同じ時刻・サイズで
-  残っているときだけ (別のリポジトリの watch が同じファイルを当てる分を待つ。同じ名前のファイルがあると ③ で見分けられず、
+  残っているときだけ (別のリポジトリの watch が同じファイルを当てる分を待つ。0.26.0 からは watch は 1 つだけなので、手で実行する
+  tazuna と前の版の watch のため。同じ名前のファイルがあると ③ で見分けられず、
   すぐ移すと向こうが当てられなかった。別視点のレビューで再現)。置き場は `isInsideRoot(root, join(dir, "x"))` で置き場自身の
   symlink も確かめる。二重適用で止めたときの「--force を付けて再実行」は watch では出さず、移したときに移した先のパスで
   コマンドを示す (describeTidy)。--root 付きで始めた watch は案内するコマンドにも --root を付ける。runApply の例外は
@@ -363,6 +364,18 @@ npm の tazuna は 2026-11-01 時点で空き。
   ③Windows で vscodeCommand が既定の "code" なら show が既定のインストール先の Code.exe を探す (findWindowsVscode。
   環境変数はドライブからの絶対パスだけ)。Code.exe は VS Code が開いていないと本体として動き続けるため、切り離して起動する
   (launchDetached。待つと show が VS Code を閉じるまで終わらない)。Windows の実機では未確認。テストは tests/diff-guide.test.ts
+- watch は同じダウンロードフォルダに 1 つだけ (v0.26.0 / 2026-11-14、同じプロジェクトの 2 か所で watch を起動して
+  1 つの changes.md が両方に当たった利用者の事例から): infra/watch-lock.ts。watch は始めるときに一時フォルダの
+  `tazuna-watch-<sha256(uid + Downloads の realpath (win32 / darwin は小文字))の 16 桁>.json` へ印 (token・pid・root・startedAt)
+  を書き、前の印を置き換える (別名に wx で書いて rename。Windows で相手が読んでいる瞬間の EPERM / EBUSY は再試行)。
+  前の watch は毎回の観測と各 changes.md の直前に checkWatchLock で印を読み、token が違えば当てずに終了する
+  (describeTakeover。exit 0)。**後から始めた方に切り替える**のは、閉じ忘れた端末を探さずに済み、残った印で始められなく
+  なることもないため (始めさせない案・両方動かして先着 1 か所の案と並べて利用者が選んだ)。印は開始時の一覧より先に
+  書く (前からあるものは新しい方が当てず、後に届いたものは前の方が当てる前に気づく)。前の watch が動いているか
+  (describeHandover で切り替えたと表示するか) は PID の存在 + 印の更新時刻 60 秒以内 (自分の印なら 10 秒ごとに utimes)。
+  印が消えていれば wx で書き直し、壊れた・自分のもの (uid) でない印は unknown として読み飛ばす。終了時は自分の token の
+  ときだけ消す。0.25.0 以前の watch とは見分けられない。片付けの 15 秒の猶予は、手で実行する tazuna と前の版のために残す。
+  テストは tests/watch-lock.test.ts と tests/watch.test.ts (同じ Downloads の 2 つの watch)
 - まとめてコミット (v0.25.0 / 2026-11-06、利用者が「実装と docs の整理が別の changes.md・別のコミットになる」点から選んだ):
   infra/history.ts の findUncommittedApplies が、直近の適用から遡って同じ gitHead の未コミットの履歴を集める (コミット済み・
   HEAD が違う・HEAD の記録がない履歴の手前で止める。記録のない古い履歴まで遡ると、とうにコミットしたファイルの関係のない
@@ -642,6 +655,7 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   2026-11-05 公開 /
   v0.24.0: 2026-11-06 規約文 v6 (概要の 1 行目をコミットの件名に) + 適用の結果に増減の行数 + Windows の show が Code.exe を探す。
   v0.25.0: 2026-11-06 tazuna commit が前回のコミットの後の適用をまとめて 1 コミットに + `-m` で件名を替える。
+  v0.26.0: 2026-11-14 watch は同じダウンロードフォルダに 1 つだけ (後から始めた watch に切り替わり、前の watch は終了する)。
   リポジトリ: https://github.com/ishibashi0112/tazuna (旧 https://github.com/ishibashi0112/petari。GitHub が転送する)
   リリース手順: version を上げて `pnpm publish` (`prepublishOnly` が typecheck → test → build を実行。認証はユーザー)
 - **publish 事故と再発防止 (2026-09-14)**: v0.9.0 は `package.json` の version だけ 0.9.0 で、

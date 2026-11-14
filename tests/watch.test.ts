@@ -3,10 +3,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { describeTidy, describeWatchResult, watchCommand } from "../src/commands/watch.ts";
+import { describeHandover, describeTakeover, describeTidy, describeWatchResult, watchCommand } from "../src/commands/watch.ts";
 import { hasChangesHeading } from "../src/core/parser.ts";
 import { initialWatchState, observeWatch, type WatchedFile } from "../src/core/watch.ts";
 import type { Manifest } from "../src/infra/history.ts";
+import { watchLockPath } from "../src/infra/watch-lock.ts";
 
 const f = (path: string, mtimeMs: number, size = 10): WatchedFile => ({ path, mtimeMs, size });
 
@@ -118,11 +119,13 @@ describe("watchCommand (§4.7)", () => {
   }
 
   /** 監視を始め、開始時の一覧を取り終えるまで待つ (当てなかったものを移す猶予は既定で 0) */
-  async function start(dir: string, tidyDelayMs = 0): Promise<{ stop: () => Promise<number> }> {
+  async function start(dir: string, tidyDelayMs = 0): Promise<{ stop: () => Promise<number>; running: Promise<number> }> {
     const ac = new AbortController();
+    const before = count("到着を待っています");
     const running = watchCommand(["--root", dir], { signal: ac.signal, intervalMs: 10, tidyDelayMs });
-    await waitFor(() => output.join("").includes("到着を待っています"), "start");
+    await waitFor(() => count("到着を待っています") > before, "start");
     return {
+      running,
       stop: async () => {
         ac.abort();
         return running;
@@ -201,7 +204,7 @@ describe("watchCommand (§4.7)", () => {
     expect(await w.stop()).toBe(0);
   });
 
-  it("猶予の間に無くなったもの (別のリポジトリの watch が当てた) は移さずにそう書く", async () => {
+  it("猶予の間に無くなったもの (別のリポジトリで当てた) は移さずにそう書く", async () => {
     const { dir, downloads } = setup();
     const w = await start(dir, 300);
     writeFileSync(join(downloads, "changes.md"), FAILING, "utf8");
@@ -212,22 +215,66 @@ describe("watchCommand (§4.7)", () => {
     expect(unapplied(dir)).toEqual([]);
   });
 
-  it("同じ Downloads を見る 2 つの watch: 当てられない側が先に片付けて、当てられる側の分を奪わない", async () => {
+  it("同じ Downloads の watch を別の場所でも始めると前の watch は終了し、changes.md は新しい方だけに当たる", async () => {
+    // 同じプロジェクトの 2 か所 (コピー) で watch を起動してしまい、両方に当たった事例 (2026-11-14)
     const a = setup();
     const b = setup();
-    // A にも同じ名前のファイルがある (中身が違うので SEARCH が当たらず、別のリポジトリ向けとも見分けられない)
-    writeFileSync(join(a.dir, "legacy.vb"), "Module M\nDim other As String\nEnd Module\n", "utf8");
     writeFileSync(join(a.dir, ".tazuna", "config.json"), JSON.stringify({ downloadsDir: b.downloads, clipReportOnFailure: false }), "utf8");
-    const wa = await start(a.dir, 1000);
-    output.length = 0;
-    const wb = await start(b.dir, 1000);
+    const wa = await start(a.dir);
+    const wb = await start(b.dir);
+    expect(output.join("")).toContain(`${a.dir} で動いていた tazuna watch (PID ${process.pid}、`);
+    // 前の watch は切り替わりに気づいて自分で終了する
+    expect(await wa.running).toBe(0);
+    expect(output.join("")).toContain(`別の場所で tazuna watch が始まりました: ${b.dir}`);
+    expect(output.join("")).toContain("ここでの監視を終了します");
+
     writeFileSync(join(b.downloads, "changes.md"), CHANGES, "utf8");
-    await waitFor(() => readFileSync(join(b.dir, "legacy.vb"), "utf8").includes("Dim count As Integer = 100"), "B applied");
-    // どちらが先に見つけても、A の猶予が過ぎた後に A の unapplied/ へ入っていない
-    await new Promise((r) => setTimeout(r, 1300));
-    expect(await wa.stop()).toBe(0);
+    await waitFor(() => !existsSync(join(b.downloads, "changes.md")), "B applied");
     expect(await wb.stop()).toBe(0);
-    expect(unapplied(a.dir)).toEqual([]);
+    expect(readFileSync(join(b.dir, "legacy.vb"), "utf8")).toContain("Dim count As Integer = 100");
+    expect(readFileSync(join(a.dir, "legacy.vb"), "utf8")).toContain("Dim count As Integer = 1\n");
+    expect(existsSync(join(a.dir, ".tazuna", "history"))).toBe(false);
+    // 終了した watch の印は消える
+    expect(existsSync(watchLockPath(b.downloads))).toBe(false);
+  });
+
+  it("同じリポジトリで 2 つ目の watch を始めると、前の watch は終了する", async () => {
+    const { dir, downloads } = setup();
+    const first = await start(dir);
+    const second = await start(dir);
+    expect(await first.running).toBe(0);
+    const text = output.join("");
+    expect(text).toContain("このリポジトリで動いていた tazuna watch");
+    expect(text).toContain("このリポジトリで別の tazuna watch が始まりました");
+    writeFileSync(join(downloads, "changes.md"), CHANGES, "utf8");
+    await waitFor(() => !existsSync(join(downloads, "changes.md")), "applied");
+    expect(await second.stop()).toBe(0);
+    expect(readdirSync(join(dir, ".tazuna", "history"))).toHaveLength(1);
+    expect(count("✓ 適用しました")).toBe(1);
+  });
+
+  it("ウィンドウを閉じて残った印 (プロセスが無い) は黙って置き換え、終了したら消す", async () => {
+    const { dir, downloads } = setup();
+    const gone = spawnSync(process.execPath, ["-e", ""]).pid;
+    const lockPath = watchLockPath(downloads);
+    writeFileSync(lockPath, JSON.stringify({ token: "old", pid: gone, root: "/old/place", startedAt: new Date().toISOString() }), "utf8");
+    const w = await start(dir);
+    expect(output.join("")).not.toContain("切り替えます");
+    expect(readFileSync(lockPath, "utf8")).toContain(JSON.stringify(dir).slice(1, -1));
+    expect(await w.stop()).toBe(0);
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it("印が消されても (一時フォルダの掃除など) 書き直して監視を続ける", async () => {
+    const { dir, downloads } = setup();
+    const w = await start(dir);
+    const lockPath = watchLockPath(downloads);
+    rmSync(lockPath);
+    await waitFor(() => existsSync(lockPath), "rewritten");
+    writeFileSync(join(downloads, "changes.md"), CHANGES, "utf8");
+    await waitFor(() => !existsSync(join(downloads, "changes.md")), "applied");
+    expect(await w.stop()).toBe(0);
+    expect(output.join("")).not.toContain("ここでの監視を終了します");
   });
 
   it("移す前に終了したものは Downloads に残し、そう書く", async () => {
@@ -419,6 +466,40 @@ describe("describeWatchResult (§4.7 結果の知らせ方)", () => {
     expect(r.headline).toContain("途中でエラー");
     expect(r.headline).not.toContain("読めませんでした");
     expect(r.details.join("\n")).toContain("git diff");
+  });
+});
+
+describe("describeHandover / describeTakeover (§4.7 watch は 1 つだけ)", () => {
+  const now = new Date(2026, 10, 14, 19, 30);
+  const prev = { pid: 4321, root: "C:\\work\\A", startedAt: new Date(2026, 10, 14, 9, 5).toISOString(), alive: true };
+
+  it("前の watch が動いていれば、その場所・PID・開始時刻を書いて切り替えたことを知らせる", () => {
+    const lines = describeHandover(prev, "C:\\work\\B", now, "win32");
+    expect(lines[0]).toBe("C:\\work\\A で動いていた tazuna watch (PID 4321、09:05 から) から、ここに切り替えます");
+    expect(lines[1]).toContain("自動で終了します");
+  });
+
+  it("同じリポジトリなら場所ではなく「このリポジトリ」と書く (Windows は大文字小文字を区別しない)", () => {
+    expect(describeHandover(prev, "c:\\WORK\\a", now, "win32")[0]).toContain("このリポジトリで動いていた");
+    expect(describeHandover(prev, "c:\\WORK\\a", now, "linux")[0]).toContain("C:\\work\\A で動いていた");
+  });
+
+  it("前の日に始めたものは日付も書く", () => {
+    const old = { ...prev, startedAt: new Date(2026, 10, 13, 18, 0).toISOString() };
+    expect(describeHandover(old, "/b", now)[0]).toContain("11/13 18:00 から");
+  });
+
+  it("前の watch が動いていない (印だけが残っていた) ときは何も書かない", () => {
+    expect(describeHandover({ ...prev, alive: false }, "/b", now)).toEqual([]);
+    expect(describeHandover(null, "/b", now)).toEqual([]);
+  });
+
+  it("切り替わった側は、始まった場所と、ここで続ける方法を書く", () => {
+    const other = describeTakeover({ pid: 99, root: "/work/B", startedAt: "" }, "/work/A", "linux");
+    expect(other.headline).toBe("別の場所で tazuna watch が始まりました: /work/B");
+    expect(other.details.join("\n")).toContain("もう一度 tazuna watch を実行");
+    const same = describeTakeover({ pid: 99, root: "/work/A", startedAt: "" }, "/work/A", "linux");
+    expect(same.headline).toBe("このリポジトリで別の tazuna watch が始まりました (PID 99)");
   });
 });
 
