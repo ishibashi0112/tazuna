@@ -4,6 +4,8 @@
  * 二重適用の防止・成功後の履歴への移動は `tazuna` (引数なし) と同じ。Ctrl+C で終了する。
  * 結果はターミナルのタイトルでも知らせ (--bell でベルも。既定は鳴らさない)、
  * 当てなかった Downloads の changes.md は少し待ってから状態ディレクトリの unapplied/ へ移す。
+ * 同じダウンロードフォルダを見る watch は 1 つだけ (後から始めた watch に切り替わり、前の watch は自分で終了する。
+ * 1 つの changes.md が 2 か所に当たらないように。infra/watch-lock.ts)。
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, relative } from "node:path";
@@ -17,6 +19,15 @@ import { listChangesFiles, resolveDownloadsDir } from "../infra/downloads.ts";
 import { findProjectRoot } from "../infra/root.ts";
 import { err, out, outEmphasis, restoreTerminalTitle, ringBell, setTerminalTitle } from "../infra/term.ts";
 import { moveToUnapplied, unappliedDir } from "../infra/unapplied.ts";
+import {
+  acquireWatchLock,
+  checkWatchLock,
+  releaseWatchLock,
+  watchLockPath,
+  type PreviousWatch,
+  type WatchLock,
+  type WatchLockInfo,
+} from "../infra/watch-lock.ts";
 import { runApply, type ApplyOutcomeKind, type ApplyResult, type DetectedChanges } from "./apply.ts";
 
 export interface WatchOptions {
@@ -26,14 +37,17 @@ export interface WatchOptions {
   intervalMs?: number;
   /** 当てなかった changes.md を unapplied/ へ移すまでの猶予 (ミリ秒)。テスト用 */
   tidyDelayMs?: number;
+  /** watch の印を置くフォルダ (既定は一時フォルダ)。テスト用 */
+  lockDir?: string;
 }
 
 const DEFAULT_INTERVAL_MS = 1000;
 /**
- * 当てなかった changes.md を移すまでの猶予。Downloads は複数のリポジトリで共通なので、別のリポジトリの
- * watch もほぼ同時に同じファイルを見つけて当てに行く (このリポジトリにも同じ名前のファイルがあって
- * 別のリポジトリ向けと見分けられなかったとき、すぐ移すとそちらの watch が当てられなくなる)。
- * どの watch も 1 秒間隔の 2 回の観測で渡すので、15 秒あれば向こうの適用が先に終わる
+ * 当てなかった changes.md を移すまでの猶予。Downloads は複数のリポジトリで共通なので、別のリポジトリで
+ * 同じファイルを当てに行くものがあり得る (0.26.0 より前の版の watch や、手で実行した tazuna。このリポジトリにも
+ * 同じ名前のファイルがあって別のリポジトリ向けと見分けられなかったとき、すぐ移すとそちらが当てられなくなる)。
+ * 0.26.0 からの watch どうしは同じ Downloads に 1 つだけ (後から始めた方に切り替わる) なので、ここでは競わない。
+ * watch は 1 秒間隔の 2 回の観測で渡すので、15 秒あれば向こうの適用が先に終わる
  */
 const DEFAULT_TIDY_DELAY_MS = 15_000;
 
@@ -163,6 +177,54 @@ export function describeTidy(
   return lines;
 }
 
+/** 開始時刻の表示 (同じ日なら時刻だけ) */
+function startedLabel(iso: string, now: Date): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return iso;
+  const hm = `${pad2(at.getHours())}:${pad2(at.getMinutes())}`;
+  return at.toDateString() === now.toDateString() ? hm : `${at.getMonth() + 1}/${at.getDate()} ${hm}`;
+}
+
+/** 同じルートか (Windows・macOS は大文字小文字を区別しないのが普通) */
+function sameRoot(a: string, b: string, platform: NodeJS.Platform): boolean {
+  return platform === "win32" || platform === "darwin" ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+/**
+ * 始めたときに、前に動いていた watch から切り替えたことを知らせる行。前の watch が動いていなければ (ウィンドウを
+ * 閉じて印だけが残っていた) 何も出さない。純粋関数
+ */
+export function describeHandover(
+  previous: PreviousWatch | null,
+  root: string,
+  now: Date,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  if (previous === null || !previous.alive) return [];
+  const where = sameRoot(previous.root, root, platform) ? "このリポジトリで" : `${previous.root} で`;
+  return [
+    `${where}動いていた ${TOOL_NAME} watch (PID ${previous.pid}、${startedLabel(previous.startedAt, now)} から) から、ここに切り替えます`,
+    "同じダウンロードフォルダを見る watch は 1 つだけです (1 つの changes.md が 2 か所に当たらないように、あちらは自動で終了します)",
+  ];
+}
+
+/** 後から始めた watch に切り替わったとき (この watch が終了するとき) の行。純粋関数 */
+export function describeTakeover(
+  by: Omit<WatchLockInfo, "token">,
+  root: string,
+  platform: NodeJS.Platform = process.platform,
+): { headline: string; details: string[] } {
+  return {
+    headline: sameRoot(by.root, root, platform)
+      ? `このリポジトリで別の ${TOOL_NAME} watch が始まりました (PID ${by.pid})`
+      : `別の場所で ${TOOL_NAME} watch が始まりました: ${by.root}`,
+    details: [
+      "同じダウンロードフォルダを見る watch は 1 つだけにするため、ここでの監視を終了します (1 つの changes.md が 2 か所に当たらないように)",
+      `ここで続けるときは、もう一度 ${TOOL_NAME} watch を実行してください (あちらの watch が終了します)`,
+    ],
+  };
+}
+
 export async function watchCommand(argv: string[], options: WatchOptions = {}): Promise<number> {
   const { values } = parseArgs({
     args: argv,
@@ -209,7 +271,7 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
   const tidyDelay = options.tidyDelayMs ?? DEFAULT_TIDY_DELAY_MS;
 
   // 猶予の後に unapplied/ へ移すもの。渡したときと同じ時刻・サイズのまま残っているときだけ移す
-  // (無くなっていれば別のリポジトリの watch が当てたか利用者が動かした。変わっていれば新着として渡し直される)
+  // (無くなっていれば別のリポジトリで当てたか利用者が動かした。変わっていれば新着として渡し直される)
   interface PendingTidy {
     path: string;
     stamp: string;
@@ -236,7 +298,7 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
       pendingTidy.splice(i, 1);
       const current = stampOf(p.path);
       if (current === null) {
-        out(`(${clock(new Date())}) ${p.path} は移す前に無くなっていました (別のリポジトリの watch が当てたか、手で動かしたようです)`);
+        out(`(${clock(new Date())}) ${p.path} は移す前に無くなっていました (別のリポジトリで当てたか、手で動かしたようです)`);
         continue;
       }
       if (current !== p.stamp) continue;
@@ -253,9 +315,32 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
     }
   };
 
+  // 同じダウンロードフォルダを見る watch は 1 つだけにする。印を置き換え、前の watch には自分で終了してもらう
+  // (印は開始時の一覧より先に書く。前の watch はこの後に届いたものを当てる前に切り替わりに気づき、この watch は
+  // それより前からあるものを当てないので、同じ changes.md を 2 つの watch が当てることはない)
+  const me: Omit<WatchLockInfo, "token"> = { pid: process.pid, root, startedAt: new Date().toISOString() };
+  let lock: WatchLock | null = null;
+  let previous: PreviousWatch | null = null;
+  let lockError: string | null = null;
+  let takenBy: Omit<WatchLockInfo, "token"> | null = null;
+  /** 後から始めた watch に切り替わっていれば true */
+  const handedOver = (): boolean => {
+    if (takenBy === null && lock !== null) {
+      const check = checkWatchLock(lock, me);
+      if (check.state === "taken") takenBy = check.by;
+    }
+    return takenBy !== null;
+  };
+
   try {
+    try {
+      ({ lock, previous } = acquireWatchLock(watchLockPath(downloadsDir, options.lockDir), me));
+    } catch (e) {
+      lockError = e instanceof Error ? e.message : String(e);
+    }
     // 開始時に既にあるファイルは対象外 (古い changes.md を黙って当てない)
     const state = initialWatchState(list());
+    for (const line of describeHandover(previous, root, new Date())) out(line);
     out("changes*.md の到着を待っています。届いたら確認なしで適用します (Ctrl+C で終了)");
     out(`  Downloads:        ${downloadsDir}`);
     out(`  プロジェクト直下: ${root}`);
@@ -267,19 +352,27 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
       `  結果はこのターミナルのタイトル${values.bell ? "とベル" : ""}でも知らせます。` +
         `当てなかった Downloads の changes.md は少し待ってから ${tidyRel} へ移します`,
     );
+    if (lockError !== null) {
+      out(
+        `  (ほかの watch と重ならないようにする印を書けませんでした: ${lockError}。` +
+          "同じダウンロードフォルダを見る watch をほかに起動しないでください)",
+      );
+    }
     title("待機中");
 
     const interval = options.intervalMs ?? DEFAULT_INTERVAL_MS;
-    while (!stop.signal.aborted) {
+    while (!stop.signal.aborted && takenBy === null) {
       try {
         await delay(interval, undefined, { signal: stop.signal });
       } catch {
         break; // 中断
       }
+      if (handedOver()) break;
       tidyDue();
       for (const f of observeWatch(state, list())) {
-        if (stop.signal.aborted) break;
-        // 別のリポジトリの watch が先に当てて履歴へ移したものは、黙って見送る
+        // 後から始めた watch に切り替わっていたら当てない (そちらが当てる)
+        if (stop.signal.aborted || handedOver()) break;
+        // 別のリポジトリで先に当てて履歴へ移したもの (手で実行した tazuna や前の版の watch) は、黙って見送る
         if (!existsSync(f.path)) continue;
         // 移すのを待っていたものが書き換わって渡し直されたら、前の結果では移さない
         for (let i = pendingTidy.length - 1; i >= 0; i--) if (pendingTidy[i]?.path === f.path) pendingTidy.splice(i, 1);
@@ -332,9 +425,16 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
         out("引き続き待っています (Ctrl+C で終了)");
       }
     }
+    if (takenBy !== null) {
+      const report = describeTakeover(takenBy, root);
+      out("");
+      outEmphasis(`━━ ${clock(new Date())} ${report.headline}`);
+      for (const line of report.details) out(`  ${line}`);
+    }
   } finally {
     process.removeListener("SIGINT", onSigint);
     options.signal?.removeEventListener("abort", onAbort);
+    if (lock !== null) releaseWatchLock(lock);
     restoreTerminalTitle();
   }
   for (const p of pendingTidy) out(`移す前に終了したため、そのまま残しています: ${p.path}`);

@@ -53,7 +53,8 @@ npx tazuna undo          # 直近の適用を巻き戻す
 changes.md が届くたびに確認なしで適用されます (毎回 `tazuna` を打たなくてよくなります)。
 失敗したときはレポートがクリップボードに入るので、そのまま AI に貼り返します。
 結果はターミナルのタイトルでも知らせ、当てなかった changes.md は Downloads から
-`.tazuna/unapplied/` へ片付けます。止めるときは Ctrl+C です。ブラウザのダウンロード先とコードが同じ PC にあることが前提で、
+`.tazuna/unapplied/` へ片付けます。止めるときは Ctrl+C です。watch は 1 つだけで、別の場所で始めると
+前の watch は終了し、新しい方に切り替わります (1 つの changes.md が 2 か所に当たらないように)。ブラウザのダウンロード先とコードが同じ PC にあることが前提で、
 RDP 越しに受け渡す運用では従来どおり `tazuna` / `tazuna --clip` を使います。
 
 **変更を依頼するメッセージには、必ず次の 1 行を添えてください** (`tazuna pack` が作る本文用テキストには
@@ -132,7 +133,7 @@ repomix の出力) が実ファイルとずれている**可能性が高いで�
 | `tazuna pack [入力]` | パックと本文用テキストを作り、貼るものをクリップボードへ (旧 slnmix。オプションは `tazuna pack --help`、説明は [docs/PACK.md](docs/PACK.md)) |
 | `tazuna build [入力]` | MSBuild でビルドし、失敗ならエラーと周辺のコードをクリップボードへ (旧 slnmix build) |
 | `tazuna [path]` | changes.md を適用。省略時は Downloads とプロジェクト直下から自動検出 (直近 30 分)。`--clip` でクリップボードから |
-| `tazuna watch` | Downloads とプロジェクト直下を見張り、起動後に届いた changes*.md を確認なしで適用し続ける (Ctrl+C で終了)。結果はタイトルでも知らせる (`--bell` で音も)。当てなかった Downloads の changes.md は `.tazuna/unapplied/` へ移す。別のリポジトリ向けらしいものは当てない。`--dry-run` で検証とプレビューだけ |
+| `tazuna watch` | Downloads とプロジェクト直下を見張り、起動後に届いた changes*.md を確認なしで適用し続ける (Ctrl+C で終了)。結果はタイトルでも知らせる (`--bell` で音も)。当てなかった Downloads の changes.md は `.tazuna/unapplied/` へ移す。別のリポジトリ向けらしいものは当てない。同じダウンロードフォルダを見る watch は 1 つだけ (別の場所で始めると前の watch は終了する)。`--dry-run` で検証とプレビューだけ |
 | `tazuna undo [ID]` | 履歴を巻き戻す (手修正がある場合は警告)。ID 省略で続けて実行すると 1 つずつ前の適用へ戻る |
 | `tazuna show [ID]` | 履歴の差分を表示 (VS Code、なければブラウザの閲覧レポートにフォールバック)。`--edit` で現在のファイルを差分を見ながら手修正 (VS Code のみ)、`--mine` で適用後の手修正分、`--changes` で変更概要、`--browser` でブラウザ強制 |
 | `tazuna list` | 履歴の一覧と合計サイズ |
