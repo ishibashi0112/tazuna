@@ -376,6 +376,20 @@ npm の tazuna は 2026-11-01 時点で空き。
   印が消えていれば wx で書き直し、壊れた・自分のもの (uid) でない印は unknown として読み飛ばす。終了時は自分の token の
   ときだけ消す。0.25.0 以前の watch とは見分けられない。片付けの 15 秒の猶予は、手で実行する tazuna と前の版のために残す。
   テストは tests/watch-lock.test.ts と tests/watch.test.ts (同じ Downloads の 2 つの watch)
+- watch の画面のコマンド (v0.27.0 / 2026-11-21、利用者の「pack を打つタブと watch のタブの 2 つが面倒」から):
+  watch の画面で 1 文字打って Enter で `p` パック (packCommand。その端末で `tazuna pack` と打つのと同じ。--root 付きの watch は
+  `[root, "--root", root]`)・`c` 前回のパックで貼るものをもう一度コピー (commands/watch-pack.ts。ルートの repomix-output.xml と
+  .prompt.md を読み、planHandoff で pack と同じものを決める。本文用テキストはパックの更新時刻 - 2 秒より古ければ前の回のものとして
+  使わない。パックの後に当てた回数 (countAppliesSince。manifest は非信頼入力として形を確かめる) があれば作り直しを促す)・
+  `b` ビルド (buildCommand。案内は findTargetQuietly で .sln / .vbproj / .csproj が見つかるときだけ。利用者が選んだ。**適用の後に
+  自動でビルドはしない**)・`h` 一覧。キーの一覧は開始時と、結果のたびに 1 行 (describeWatchGuide) で出す (利用者の希望)。
+  **raw モードにしない** (core/watch-keys.ts の冒頭): Ctrl+C がキー入力になってパック・クリップボード・MSBuild の同期処理の
+  途中で止められなくなる・Git Bash (mintty) で読めない・誤って画面に貼り付けた文章の中の 1 文字に反応するため。readline を
+  terminal: false で使い (infra/watch-keys.ts)、50 ミリ秒以内にまとめて届いた行を 1 回の入力とみなして、内容のある行が 2 行以上なら
+  貼り付けとして何もしない。NFKC で全角 (IME がオンのときの ｐ)・大文字をそろえる。コマンドは観測の間に順に行い (適用の最中に
+  打ったものはその後。同じものは 1 回にまとめる)、打つと観測の待ちを切り上げる。標準入力は cli が `input: process.stdin` で渡し、
+  指定がなければ読まない (テストで実行機の標準入力を読まないように。pack / build / writeClipboard / buildAvailable もテスト用に
+  差し替えられる)。Windows の実機では未確認 (コンソールの行入力・IME・Ctrl+C)。テストは tests/watch-keys.test.ts
 - まとめてコミット (v0.25.0 / 2026-11-06、利用者が「実装と docs の整理が別の changes.md・別のコミットになる」点から選んだ):
   infra/history.ts の findUncommittedApplies が、直近の適用から遡って同じ gitHead の未コミットの履歴を集める (コミット済み・
   HEAD が違う・HEAD の記録がない履歴の手前で止める。記録のない古い履歴まで遡ると、とうにコミットしたファイルの関係のない
@@ -656,6 +670,7 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   v0.24.0: 2026-11-06 規約文 v6 (概要の 1 行目をコミットの件名に) + 適用の結果に増減の行数 + Windows の show が Code.exe を探す。
   v0.25.0: 2026-11-06 tazuna commit が前回のコミットの後の適用をまとめて 1 コミットに + `-m` で件名を替える。
   v0.26.0: 2026-11-14 watch は同じダウンロードフォルダに 1 つだけ (後から始めた watch に切り替わり、前の watch は終了する)。
+  v0.27.0: 2026-11-21 watch の画面で p Enter でパック、c Enter で前回のパックで貼るものをもう一度コピー、b Enter でビルド。
   リポジトリ: https://github.com/ishibashi0112/tazuna (旧 https://github.com/ishibashi0112/petari。GitHub が転送する)
   リリース手順: version を上げて `pnpm publish` (`prepublishOnly` が typecheck → test → build を実行。認証はユーザー)
 - **publish 事故と再発防止 (2026-09-14)**: v0.9.0 は `package.json` の version だけ 0.9.0 で、

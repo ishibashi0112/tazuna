@@ -4,7 +4,7 @@
 コマンドラインツール tazuna の導入審査用の資料です。
 どのデータがどこへ出るか、ツールが何をして何をしないかを、コードで確かめられる形でまとめます。
 
-- 対象: tazuna 0.26.0(2026-11-14 時点)
+- 対象: tazuna 0.27.0(2026-11-21 時点)
 - ソース: <https://github.com/ishibashi0112/tazuna>
 - ライセンス: MIT
 - 以前の slnmix(パックを作る側)と petari(変更を当てる側)は、0.15.0 で 1 つのパッケージにまとめ、tazuna に
@@ -209,7 +209,8 @@ AI の回答に `[MASKED]` が残っていても、tazuna は伏せた後の内�
 ### 4.3 クリップボード
 
 `tazuna pack` は実行の最後に、チャットに貼るもの(パック全体、または大きいときは指示文だけ)を
-クリップボードに入れます。`tazuna build` は失敗したときのエラーの文面を、適用に失敗したときは
+クリップボードに入れます。`tazuna watch` の画面で `c` を打って Enter を押したときは、前回のパックの出力ファイル
+(作ったときに伏せたもの)から同じものをもう一度入れます(0.27.0。新しくソースを読むことはしません)。`tazuna build` は失敗したときのエラーの文面を、適用に失敗したときは
 失敗レポートを入れます。Windows の**クリップボードの履歴**や**デバイス間の同期**が
 有効だと、その内容が履歴に残る・同期されることがあります。
 
@@ -287,6 +288,9 @@ tazuna は changes.md の内容を**実行しません**。テキストとして
 結果はターミナルのタイトルでも知らせます(`--bell` のときはベルも。タイトルの文字列から制御文字を取り除き、端末へ送る
 制御シーケンスはツールに書かれた固定のものだけ。通知のための外部コマンドは使いません)。
 対象のファイルがこのリポジトリに無い changes.md は、別のリポジトリ向けとみなして当てません。
+watch の画面では、利用者が 1 文字打って Enter を押したときだけパック(`p`)・ビルド(`b`)・前回のパックで貼るものの
+コピー(`c`)を行います(0.27.0。`tazuna pack` / `tazuna build` と同じ処理です)。**適用の後に自動でビルドはしません**。
+画面に複数行がまとめて入力されたとき(誤って貼り付けたとき)は、どのコマンドも実行しません。
 
 **AI が書いたコードが PC 上で動くのは、利用者がビルド・テストを実行したとき**です
 (`tazuna build` もビルドを実行します)。.vbproj のビルドイベントのように、プロジェクトの
@@ -306,13 +310,13 @@ git は、下の表のコミットを除いて読み取りだけで使い、リ�
 
 | コマンド | いつ | 目的 |
 |---|---|---|
-| `powershell`(Set-Clipboard)/ `pbcopy` / `xclip` | `tazuna pack` の最後、`tazuna build` の失敗時、適用の失敗時 | 貼るもの・エラーの文面・失敗レポートをクリップボードへ入れる(`--no-clip` と設定で止まる) |
+| `powershell`(Set-Clipboard)/ `pbcopy` / `xclip` | `tazuna pack` の最後、`tazuna build` の失敗時、適用の失敗時、`tazuna watch` の画面の `p` / `b` / `c` | 貼るもの・エラーの文面・失敗レポートをクリップボードへ入れる(`--no-clip` と設定で止まる) |
 | `powershell`(Get-Clipboard)/ `pbpaste` / `xclip` | `tazuna --clip` のときだけ | changes.md をクリップボードから読む |
 | `git ls-files` | `tazuna pack` で、VB.NET 以外の構成に `extraRoots` を書いていないとき。適用で、changes.md の対象のファイルがどれもプロジェクトに無いとき | パックに入れるファイルの一覧を得る。適用では、同じ名前のファイルがあるかで別のリポジトリ向けの changes.md かを見分ける(読み取りだけ) |
 | `git status --porcelain` | 適用の前 | 未コミットの変更があれば警告する(読み取りだけ) |
 | `git rev-parse` | 適用のたび | 適用したときの HEAD を履歴に記録する(後で利用者が自分でコミットしたかを見分けるため。読み取りだけ) |
 | `git ls-files` / `git add` / `git status` / `git commit --only` | `tazuna commit` を実行したとき。設定の `git.commitEachApply` を有効にしたときは、次の changes.md を当てる直前 | 前回のコミットの後の適用で tazuna が書いたファイル(履歴に記録したもの。`.gitignore` で除外したものは除く)だけをコミットする(複数回分は 1 つにまとめる。0.25.0)。git が返した一覧は履歴のパスと名前が一致するものだけに絞る(履歴に `.` やフォルダの名前が書かれていても、その下のファイルを入れない)。メッセージは changes.md の概要から作る。push・フック・ほかのファイルのステージはしない |
-| `vswhere.exe` / `MSBuild.exe` | `tazuna build` のときだけ | Visual Studio に付属する MSBuild を探してビルドする(`--msbuild` で場所を指定できる) |
+| `vswhere.exe` / `MSBuild.exe` | `tazuna build` と、`tazuna watch` の画面で `b` を打って Enter を押したときだけ | Visual Studio に付属する MSBuild を探してビルドする(`--msbuild` で場所を指定できる) |
 | `reg query` | 引数なしの `tazuna` / `tazuna watch` | ダウンロードフォルダの場所を調べる(OneDrive へのリダイレクト対応) |
 | `code --diff` | `tazuna show` | VS Code で差分を開く(コマンド名か絶対パスのみ許可)。Windows で設定が既定の `code` のときは、VS Code の既定のインストール先(`%LOCALAPPDATA%\Programs\Microsoft VS Code` と `%ProgramFiles%` の下)にある `Code.exe` を起動する(0.24.0。ドライブからの絶対パスのときだけ。プロジェクトの中のファイルは使わない) |
 | `Start-Process` / `open` / `xdg-open` | `tazuna show` で VS Code が無いとき | 差分レポートを既定のブラウザで開く |

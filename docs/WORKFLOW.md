@@ -29,16 +29,18 @@
 初回だけ   npx tazuna init            (リポジトリ直下で。構成の判定・docs/・.gitignore・
                                        .tazuna/ をまとめて作る)
 
-作業の始めに npx tazuna watch         (別の端末で起動したままにする。Ctrl+C で終了)
+作業の始めに npx tazuna watch         (起動したままにする。Ctrl+C で終了。pack と build も
+                                       この画面で打てるので、端末は 1 つで足りる)
 
 毎回       npx tazuna pack            → 貼るものがクリップボードに入る
+                                       (watch の画面なら p を打って Enter)
            Copilot Chat: 本文に貼って送信 (パックが大きいときだけ .xml も添付。
                          どちらかは実行末尾の 1 行に出る)
            AI の changes.md をダウンロード → watch が自動で適用し、結果を
                                        ターミナルのタイトルで知らせる
                                        (watch を使わないときは npx tazuna)
            npx tazuna build           → 失敗ならエラーと周辺のコードがクリップボードに入る
-                                         → チャットに貼る
+                                         → チャットに貼る (watch の画面なら b を打って Enter)
            pnpm test:all              → 失敗ならクリップボードのレポートをチャットに貼る
            手動確認は引継ぎ書の手動項目だけ → 「OK」と AI に伝える
 ```
@@ -59,6 +61,19 @@
 watch は同じダウンロードフォルダに 1 つだけです (0.26.0)。別の端末やフォルダで watch を始めると、前の watch は
 「別の場所で tazuna watch が始まりました」と表示して自分で終了し、新しい方に切り替わります (1 つの changes.md が
 2 か所に当たらないように)。前のリポジトリに戻すときは、そこでもう一度 `npx tazuna watch` を実行します。
+watch の画面では、1 文字打って Enter でパックとビルドもできます (0.27.0)。pack 用に別の端末を開かなくて済みます。
+
+| 打つもの | すること |
+|---|---|
+| `p` Enter | パックを作る (その端末で `npx tazuna pack` と打つのと同じ。貼るものはクリップボードに入る) |
+| `c` Enter | 前回のパックで貼るものを、もう一度クリップボードに入れる (パックが約 120K 文字以内ならパック全体、超えるなら本文用テキスト。失敗レポートなど別のものをコピーした後や、新しいチャットに貼り直すとき)。パックの後に changes.md を当てていれば、作り直すよう 1 行添える |
+| `b` Enter | ビルドする (`npx tazuna build` と同じ。.sln / .vbproj / .csproj のプロジェクトだけ。失敗したらエラーと周辺のコードがクリップボードに入る) |
+| `h` Enter | 一覧を出す |
+
+キーの一覧は watch を始めたときと結果のたびに画面に出ます。全角の `ｐ` (IME がオンのとき) や大文字でも同じです。
+ビルドは `b` を打ったときだけで、適用の後に自動ではしません (差分を確かめてから動かすため)。
+パックやビルドの最中に届いた changes.md は、終わってから当てます。誤って watch の画面に複数行を貼り付けても、
+中の文字には反応しません。オプション付きのパック (`--task` や `--design`) は、従来どおり別の端末で打ちます。
 watch はブラウザのダウンロード先とコードが同じ PC にあるときに使えます。リモート
 デスクトップ越しに changes.md を受け渡す運用では、従来どおり `npx tazuna` / `npx tazuna --clip` です。
 web と dotnet を分けたアプリ (webview2-bridge の雛形。`.sln` は `dotnet/` の下) でも同じです。
@@ -391,6 +406,7 @@ npx tazuna pack --init-config      VB.NET 以外向けの tazuna.config.json だ
 npx tazuna build                   MSBuild でビルドし、失敗ならエラーと周辺のコードをコピー
 
 npx tazuna watch                   起動したままにすると、届いた changes.md を確認なしで適用し続ける
+                                   (画面で p Enter: パック / c Enter: 貼るものをもう一度コピー / b Enter: ビルド)
 npx tazuna                         Downloads の changes.md を適用
 npx tazuna undo                    直前の適用を巻き戻す (続けて実行すると 1 つずつ前へ)
 npx tazuna show                    直前の適用の差分を表示 (3-11)

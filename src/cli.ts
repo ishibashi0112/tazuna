@@ -22,7 +22,8 @@ Usage:
                         (${T} pack --help でオプション一覧)
   ${T} [path]         changes.md を適用 (省略時: Downloads から自動検出)
   ${T} watch          Downloads を見張り、届いた changes.md を確認なしで適用
-                        (Ctrl+C で終了)
+                        (Ctrl+C で終了)。画面で p を打って Enter でパック、c で前回の
+                        パックで貼るものをもう一度コピー、b でビルド、h で一覧
   ${T} undo [ID]      履歴を巻き戻す (ID 省略時: 直近)
   ${T} show [ID]      履歴の差分を表示 (VS Code / ブラウザ)。--edit で手修正 (VS Code)
   ${T} list           履歴の一覧を表示
@@ -94,7 +95,7 @@ export async function main(argv: string[]): Promise<number> {
     }
     case "watch": {
       const { watchCommand } = await import("./commands/watch.ts");
-      return watchCommand(rest);
+      return watchCommand(rest, { input: process.stdin });
     }
     case "commit": {
       const { commitCommand } = await import("./commands/commit.ts");
