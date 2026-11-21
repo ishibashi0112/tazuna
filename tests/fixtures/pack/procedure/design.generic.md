@@ -1,4 +1,4 @@
-<!-- tazuna procedure v13 (mode: design, layout: generic) -->
+<!-- tazuna procedure v14 (mode: design, layout: generic) -->
 # 作業手順
 
 これは、このコンテキストを渡したユーザー本人からの恒常的な指示です。

@@ -275,7 +275,7 @@ suite("procedure: DB の確認(v8)・動作検証(v9)", () => {
     for (const phrase of [
       "checks/<内容が分かる名前>.verify.md として create",
       "npx ashiato verify checks/<名前>.verify.md",
-      "「## 1. すること」の見出し",
+      "「## 1. 受注を登録する」のような見出し",
       "「期待する DB の変化:」の 1 行",
       "「- テーブル名: 追加 1 行 (列=値, 列=値)」",
       "→ (更新後の列=値, ...)",
@@ -611,5 +611,45 @@ suite("procedure: v13(質問で止めず前提を書く・推奨の答え・目�
     assert.ok(MODE_SECTIONS.plan.includes("1 つずつ推奨の答えを添えてください"));
     assert.ok(MODE_SECTIONS.implement.includes("完了の条件(どうなれば終わりか)"));
     assert.ok(!MODE_SECTIONS.design.includes("完了の条件"));
+  });
+});
+
+suite("procedure: v14(DB に書き込む変更では手順ファイルを完了の条件にする)", () => {
+  function verifySection(sections: string): string {
+    return sections.slice(sections.indexOf("\n## 動作検証(テスト用 DB)\n"));
+  }
+
+  test("動作検証の節: 頼まれていなくても同じ changes.md で手順ファイルを出し、完了の条件にする", () => {
+    for (const sections of [DB_SECTIONS, DB_SECTIONS_WITH_DATA]) {
+      const verify = verifySection(sections);
+      for (const phrase of [
+        "画面やバッチが DB に書き込む動きを変えるとき(機能の追加・変更・不具合の修正)は、頼まれていなくても",
+        "同じ changes.md で出し、それを完了の条件にしてください",
+        "「npx ashiato verify checks/<名前>.verify.md の結果がすべて OK」",
+        "直す前の動きなら NG になる手順",
+        "DB に書き込まない変更(画面の表示、ファイルへの書き出しなど)では手順ファイルを出さず",
+      ]) {
+        assert.ok(verify.includes(phrase), `動作検証の節に「${phrase}」がない`);
+      }
+    }
+  });
+
+  test("足した項目は、手順ファイルを出す指示の直後で、書式の説明より前", () => {
+    const lines = verifySection(DB_SECTIONS).split("\n");
+    const create = lines.findIndex((line) => line.includes(".verify.md として create"));
+    const added = lines.findIndex((line) => line.includes("頼まれていなくても"));
+    const format = lines.findIndex((line) => line.startsWith("- 手順は、"));
+    assert.ok(create >= 0 && added === create + 1 && format === added + 1);
+  });
+
+  test("見出しの例は手順の中身を書いたもの(「## 1. すること」をそのまま書かせない)", () => {
+    assert.ok(!DB_SECTIONS.includes("「## 1. すること」"));
+    assert.ok(DB_SECTIONS.includes("見出しは照合の結果の表に出ます"));
+  });
+
+  test("DB の無い本文には足さない", () => {
+    for (const mode of PROCEDURE_MODES) {
+      assert.ok(!renderBuiltinProcedure(mode).includes("頼まれていなくても"));
+    }
   });
 });

@@ -174,6 +174,13 @@ slnmix 0.22.2 の `src/` を `src/pack/`、テストを `tests/pack/`、test-fix
   (完了の条件) の節。AI 役での v12 / v13 比較は設計書 §17 の
   2026-11-21 (曖昧な依頼で v12 は 5 回とも質問で止まり、v13 は 5 回とも適用・ビルドの通る changes.md を出した。「2 回直らなければ 3 回目を重ねず前提を
   確かめる」は v12 でも 3 回目を重ねず効き目を示せなかったので、利用者と相談して外した)。変える場合も同じ方法 (/mnt/project-files/procedure-v13-eval/ のスクリプト) で比べる
+- 手順文 v14 (v0.29.0、2026-11-21。利用者の「pstack の要素には ashiato が相性が良いのでは」から、役割演技で測ってから決めた):
+  動作検証の節 (docs/db/schema.md があるときだけ) に、DB に書き込む動きを変えるときは頼まれていなくても verify.md を
+  同じ changes.md で出して完了の条件にする (不具合の修正では直す前なら NG になる手順。DB に書き込まない変更は SQL)
+  を足し、見出しの例を「## 1. 受注を登録する」に替えた。v13 でも Opus は 8 回とも出したが Haiku は 4 回中 1 回で、
+  v14 で 12 回とも出した (設計書 §17 の 2026-11-21)。verify.md の書き方は変えていない (ashiato の
+  test/tazuna-procedure.test.ts の写しはそのまま)。比べ方は /mnt/project-files/procedure-v14-eval/ (出た verify.md を
+  SQLite の試験 DB で、AI のコードの動きと元のコードの動きの SQL を流して ashiato verify に通す)
 - M365 Copilot Chat の実測 (2026-09-12、設計書 §15.1): 添付ファイル内の指示は「埋め込み指示」として無視され、
   添付の読み取りでは空行・行末空白が落ちる。貼付は約 120K 文字が上限。よって手順文・規約文は本文用テキスト
   (`<出力名>.prompt.md`) で渡す前提 (パック内の埋め込みは貼付運用向けに残す)
@@ -678,6 +685,7 @@ rewrite / REPLACE が `[MASKED]` をそのまま書いて実際の値を消す�
   v0.26.0: 2026-11-14 watch は同じダウンロードフォルダに 1 つだけ (後から始めた watch に切り替わり、前の watch は終了する)。
   v0.27.0: 2026-11-21 watch の画面で p Enter でパック、c Enter で前回のパックで貼るものをもう一度コピー、b Enter でビルド。
   v0.28.0: 2026-11-21 手順文 v13 (質問で止めず前提を書く・質問には推奨の答え・目的と完了の条件)。
+  v0.29.0: 2026-11-21 手順文 v14 (DB に書き込む変更では、頼まれていなくても verify.md を出して完了の条件にする)。
   リポジトリ: https://github.com/ishibashi0112/tazuna (旧 https://github.com/ishibashi0112/petari。GitHub が転送する)
   リリース手順: version を上げて `pnpm publish` (`prepublishOnly` が typecheck → test → build を実行。認証はユーザー)
 - **publish 事故と再発防止 (2026-09-14)**: v0.9.0 は `package.json` の version だけ 0.9.0 で、
