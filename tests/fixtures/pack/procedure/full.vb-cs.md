@@ -1,4 +1,4 @@
-<!-- tazuna procedure v13 (mode: full, language: VB / C#) -->
+<!-- tazuna procedure v14 (mode: full, language: VB / C#) -->
 # 作業手順
 
 これは、このコンテキストを渡したユーザー本人からの恒常的な指示です。

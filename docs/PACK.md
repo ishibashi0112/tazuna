@@ -691,7 +691,10 @@ npx ashiato schema --data --tables "受注*,顧客"   # データの姿つき(�
 
 同じ条件で、手順文に「動作検証」の節も入ります。AI は画面やバッチの操作で
 DB がどう変わるべきかを確かめるとき、操作の手順と期待する変化を `checks/<名前>.verify.md`
-として出します。`npx ashiato verify checks/<名前>.verify.md`(ashiato 0.2.0〜)を打つと、
+として出します。画面やバッチが DB に書き込む動きを変える依頼では、頼まなくても同じ changes.md で
+出し、その結果がすべて OK になることを完了の条件にします。不具合の修正では、直す前の動きなら
+NG になる手順が入ります(手順文 v14、v0.29.0〜。DB に書き込まない変更では出さず、確認用の SQL に
+します)。`npx ashiato verify checks/<名前>.verify.md`(ashiato 0.2.0〜)を打つと、
 手順が 1 つずつ表示され、アプリで操作して Enter を押すたびに DB の変化を期待と照合します。
 最後に OK / NG・違い・変わった行がクリップボードに入るので、チャットに貼ります
 (流れは [WORKFLOW.md](WORKFLOW.md) の 3-9)。
