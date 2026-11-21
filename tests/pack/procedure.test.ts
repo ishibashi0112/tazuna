@@ -568,7 +568,7 @@ suite("procedure: v10(コメント方針・<environment>・自己検証の表)",
   });
 });
 
-suite("procedure: v13(質問で止めず前提を書く・目的と完了の条件・2 回直らなければ前提を確かめる)", () => {
+suite("procedure: v13(質問で止めず前提を書く・推奨の答え・目的と完了の条件)", () => {
   function principles(text: string): string {
     const start = text.indexOf("\n## 判断の原則\n");
     return text.slice(start, text.indexOf("\n## コード中のコメント\n"));
@@ -582,7 +582,6 @@ suite("procedure: v13(質問で止めず前提を書く・目的と完了の条�
         "CHANGES の概要の 2 行目以降に「前提: 」で始まる行で 1 つずつ書いてください",
         "名前の付いた定数などにまとめてください",
         "1 つずつ推奨の答えを添えてください",
-        "3 回目の修正を重ねないでください",
       ]) {
         assert.ok(text.includes(phrase), `${layout}: 「${phrase}」がない`);
       }
