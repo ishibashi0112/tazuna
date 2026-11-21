@@ -6,19 +6,24 @@
  * 当てなかった Downloads の changes.md は少し待ってから状態ディレクトリの unapplied/ へ移す。
  * 同じダウンロードフォルダを見る watch は 1 つだけ (後から始めた watch に切り替わり、前の watch は自分で終了する。
  * 1 つの changes.md が 2 か所に当たらないように。infra/watch-lock.ts)。
+ * 画面で p (パック)・c (前回のパックで貼るものをもう一度コピー)・b (ビルド)・h (一覧) を打って Enter で操作できる
+ * (0.27.0。パック・ビルド用の端末を別に開かなくて済むように。core/watch-keys.ts・commands/watch-pack.ts)。
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, relative } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
-import { TOOL_NAME } from "../brand.ts";
+import { BUILD_COMMAND, PACK_COMMAND, TOOL_NAME } from "../brand.ts";
 import { hasChangesHeading } from "../core/parser.ts";
 import { initialWatchState, observeWatch, type WatchedFile } from "../core/watch.ts";
+import type { WatchCommand, WatchInput } from "../core/watch-keys.ts";
+import { writeClipboardSync, type ClipboardResult } from "../infra/clipboard.ts";
 import { loadConfig } from "../infra/config.ts";
 import { listChangesFiles, resolveDownloadsDir } from "../infra/downloads.ts";
 import { findProjectRoot } from "../infra/root.ts";
 import { err, out, outEmphasis, restoreTerminalTitle, ringBell, setTerminalTitle } from "../infra/term.ts";
 import { moveToUnapplied, unappliedDir } from "../infra/unapplied.ts";
+import { listenWatchInput, type WatchInputListener } from "../infra/watch-keys.ts";
 import {
   acquireWatchLock,
   checkWatchLock,
@@ -28,7 +33,9 @@ import {
   type WatchLock,
   type WatchLockInfo,
 } from "../infra/watch-lock.ts";
+import { PASTE_LIMIT_CHARS, planHandoff } from "../pack/handoff.ts";
 import { runApply, type ApplyOutcomeKind, type ApplyResult, type DetectedChanges } from "./apply.ts";
+import { describeCopy, readLastPack } from "./watch-pack.ts";
 
 export interface WatchOptions {
   /** 監視を止める合図 (テスト用。指定がなくても Ctrl+C で止まる) */
@@ -39,6 +46,22 @@ export interface WatchOptions {
   tidyDelayMs?: number;
   /** watch の印を置くフォルダ (既定は一時フォルダ)。テスト用 */
   lockDir?: string;
+  /**
+   * 画面で打つコマンド (p / c / b / h + Enter) を読むストリーム。cli から process.stdin を渡す。
+   * 指定がなければコマンドを受け付けない (テストで実行機の標準入力を読まないように)
+   */
+  input?: NodeJS.ReadableStream;
+  /** p で作るパック (既定は tazuna pack と同じ packCommand)。テスト用 */
+  pack?: (argv: string[]) => number | Promise<number>;
+  /** b で行うビルド (既定は tazuna build と同じ buildCommand)。テスト用 */
+  build?: (argv: string[]) => number | Promise<number>;
+  /**
+   * b を案内するか (.sln / .vbproj / .csproj が見つかるか)。既定は tazuna build と同じ探し方で決める。テスト用。
+   * 案内しないときも b は打てる (tazuna build と同じ理由の行を出す)
+   */
+  buildAvailable?: boolean;
+  /** c でクリップボードに書く (既定は writeClipboardSync)。テスト用 (実行機のクリップボードを汚さないように) */
+  writeClipboard?: (text: string) => ClipboardResult;
 }
 
 const DEFAULT_INTERVAL_MS = 1000;
@@ -80,6 +103,8 @@ export function describeWatchResult(
     /** 後で unapplied/ へ移すとき、その先 (ルートからの相対) と猶予の秒数 */
     tidy: { dir: string; afterSec: number } | null;
     rootOption: string | null;
+    /** 画面で b (ビルド) を打てるとき true (次にすることの案内に添える) */
+    buildKey?: boolean;
   },
 ): WatchReport {
   const later: string[] =
@@ -91,7 +116,11 @@ export function describeWatchResult(
       return {
         title: `✓ 適用 ${result.files} ファイル`,
         headline: `✓ 適用しました (${result.files} ファイル)`,
-        details: [`差分を VS Code のソース管理か ${TOOL_NAME} show で確認してからビルドしてください`],
+        details: [
+          file.buildKey === true
+            ? `差分を VS Code のソース管理か ${TOOL_NAME} show で確認してから、b を打って Enter でビルドしてください`
+            : `差分を VS Code のソース管理か ${TOOL_NAME} show で確認してからビルドしてください`,
+        ],
       };
     case "already-applied":
       return {
@@ -225,6 +254,40 @@ export function describeTakeover(
   };
 }
 
+/** 画面で打てるコマンドの一覧 (開始時と h のとき)。build: b (ビルド) を案内するか。純粋関数 */
+export function describeWatchKeys(options: { build: boolean }): string[] {
+  return [
+    "画面で 1 文字打って Enter:",
+    `  p  パックを作る (この端末で ${PACK_COMMAND} と打つのと同じ。貼るものをクリップボードへ)`,
+    "  c  前回のパックで貼るものを、もう一度クリップボードへ (別のものをコピーした後や、新しいチャットに貼り直すとき)",
+    ...(options.build
+      ? [`  b  ビルドする (${BUILD_COMMAND} と同じ。失敗したらエラーと周辺のコードをクリップボードへ)`]
+      : []),
+    "  h  この一覧を出す",
+  ];
+}
+
+/** 結果の後の 1 行の案内 (待っていることと、打てるコマンド)。keys: コマンドを受け付けるか。純粋関数 */
+export function describeWatchGuide(options: { keys: boolean; build: boolean }): string {
+  if (!options.keys) return "引き続き待っています (Ctrl+C で終了)";
+  return (
+    "引き続き待っています ― 打って Enter: p パックを作る / c 貼るものをもう一度コピー / " +
+    (options.build ? "b ビルド / " : "") +
+    "h 一覧 (Ctrl+C で終了)"
+  );
+}
+
+/** 打ったものがコマンドでなかったとき・貼り付けとみなしたときの行 (それ以外は null)。純粋関数 */
+export function describeWatchInput(input: WatchInput): string | null {
+  if (input.kind === "pasted") {
+    return `${input.lines} 行がまとめて入力されたため、貼り付けとみなして何もしていません (コマンドは 1 文字を打って Enter)`;
+  }
+  if (input.kind === "unknown") {
+    return `「${input.text.length > 20 ? `${input.text.slice(0, 20)}…` : input.text}」はコマンドではありません`;
+  }
+  return null;
+}
+
 export async function watchCommand(argv: string[], options: WatchOptions = {}): Promise<number> {
   const { values } = parseArgs({
     args: argv,
@@ -253,6 +316,9 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
   };
 
   const stop = new AbortController();
+  // 観測の間の待ちを、打ったコマンドで早めに切り上げる (stop で止めたときも切り上げる)
+  let tick = new AbortController();
+  stop.signal.addEventListener("abort", () => tick.abort(), { once: true });
   const onSigint = (): void => stop.abort();
   process.once("SIGINT", onSigint);
   const onAbort = (): void => stop.abort();
@@ -315,6 +381,130 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
     }
   };
 
+  // 画面で打ったコマンド (p / c / b / h + Enter)。観測の間に行い、適用の最中に打ったものはその後に順に行う
+  // (同じコマンドが待っていれば 1 回にまとめる)。コマンドでない入力は、行を 1 つ出すだけ
+  type QueuedCommand = { kind: "command"; command: WatchCommand } | { kind: "note"; line: string; withKeys: boolean };
+  const commands: QueuedCommand[] = [];
+  let listener: WatchInputListener | null = null;
+  const onInput = (input: WatchInput): void => {
+    if (input.kind === "empty") return;
+    if (input.kind === "command") {
+      if (commands.some((c) => c.kind === "command" && c.command === input.command)) return;
+      commands.push({ kind: "command", command: input.command });
+    } else {
+      commands.push({ kind: "note", line: describeWatchInput(input) ?? "", withKeys: input.kind === "unknown" });
+    }
+    tick.abort();
+  };
+  const keysEnabled = options.input !== undefined;
+  // b を案内するのは、tazuna build と同じ探し方で .sln / .vbproj / .csproj が見つかるときだけ
+  // (kind: "generic" の構成ではビルドのコマンドはプロジェクトのもの)
+  const findBuildTarget = async (): Promise<boolean> => {
+    try {
+      const { findTargetQuietly } = await import("./pack-io.ts");
+      return findTargetQuietly(values.root === undefined ? undefined : root) !== undefined;
+    } catch {
+      return false;
+    }
+  };
+  const buildAvailable = options.buildAvailable ?? (keysEnabled && (await findBuildTarget()));
+  const waitingLine = describeWatchGuide({ keys: keysEnabled, build: buildAvailable });
+  const hhmm = (): string => clock(new Date()).slice(0, 5);
+
+  // p / b: この端末で tazuna pack / tazuna build と打つのと同じ (--root 付きで始めた watch は、そのルートのもの)
+  const targetArgs = rootOption === null ? [] : [root, "--root", root];
+  const commandLabel = (command: string): string =>
+    rootOption === null ? command : `${command} ${quoted(root)} --root ${quoted(root)}`;
+  /** パック・ビルドを行う。例外でも監視ごと止めない */
+  const runTool = async (run: (args: string[]) => number | Promise<number>): Promise<number> => {
+    try {
+      return await run([...targetArgs]);
+    } catch (e) {
+      err(`${TOOL_NAME}: ${e instanceof Error ? e.message : String(e)}`);
+      return 1;
+    }
+  };
+  const runPack = options.pack ?? (async (args: string[]) => (await import("./pack.ts")).packCommand(args));
+  const packNow = async (): Promise<void> => {
+    out("");
+    out(`━━ ${clock(new Date())} パックを作ります (${commandLabel(PACK_COMMAND)})`);
+    title("パック作成中");
+    const code = await runTool(runPack);
+    out("");
+    if (code === 0) {
+      outEmphasis("✓ パックを作りました (Copilot Chat への渡し方は上に出ています)");
+      title(`✓ パック作成 (${hhmm()})`);
+    } else {
+      outEmphasis("✗ パックを作れませんでした (理由は上)");
+      title(`✗ パック失敗 (${hhmm()})`);
+    }
+  };
+
+  // b: ビルド。打ったときだけ行う (適用の後に自動でビルドはしない。差分を確かめてから動かすため)
+  const runBuild = options.build ?? (async (args: string[]) => (await import("./build.ts")).buildCommand(args));
+  const buildNow = async (): Promise<void> => {
+    out("");
+    out(`━━ ${clock(new Date())} ビルドします (${commandLabel(BUILD_COMMAND)})`);
+    title("ビルド中");
+    const code = await runTool(runBuild);
+    out("");
+    if (code === 0) {
+      outEmphasis("✓ ビルドに成功しました");
+      title(`✓ ビルド成功 (${hhmm()})`);
+    } else {
+      outEmphasis("✗ ビルドできませんでした (理由は上。エラーをクリップボードにコピーしたときは、そのまま AI チャットに貼ってください)");
+      title(`✗ ビルド失敗 (${hhmm()})`);
+    }
+    if (values.bell) ringBell();
+  };
+
+  // c: 前回のパックで貼るもの (tazuna pack がクリップボードに入れるものと同じ) を、もう一度クリップボードへ
+  const writeClipboard = options.writeClipboard ?? writeClipboardSync;
+  const copyNow = (): void => {
+    out("");
+    out(`━━ ${clock(new Date())} 前回のパックで貼るものをコピーします`);
+    const last = readLastPack(root);
+    const plan = last === null ? null : planHandoff(last.pack, last.prompt, PASTE_LIMIT_CHARS);
+    let copied: ClipboardResult | null = null;
+    if (plan !== null && plan.kind !== "none") {
+      try {
+        copied = writeClipboard(plan.text);
+      } catch (e) {
+        copied = { ok: false, message: e instanceof Error ? e.message : String(e) };
+      }
+    }
+    const report = describeCopy(last, plan, copied, new Date());
+    outEmphasis(report.headline);
+    for (const line of report.details) out(`  ${line}`);
+    title(`${report.title} (${hhmm()})`);
+  };
+
+  const runCommand = async (queued: QueuedCommand): Promise<void> => {
+    if (queued.kind === "note") {
+      out(`(${clock(new Date())}) ${queued.line}`);
+      if (queued.withKeys) for (const line of describeWatchKeys({ build: buildAvailable })) out(`  ${line}`);
+      return;
+    }
+    switch (queued.command) {
+      case "help":
+        out("");
+        for (const line of describeWatchKeys({ build: buildAvailable })) out(line);
+        out("  Ctrl+C  終了");
+        return;
+      case "pack":
+        await packNow();
+        break;
+      case "copy":
+        copyNow();
+        break;
+      case "build":
+        await buildNow();
+        break;
+    }
+    out("");
+    out(waitingLine);
+  };
+
   // 同じダウンロードフォルダを見る watch は 1 つだけにする。印を置き換え、前の watch には自分で終了してもらう
   // (印は開始時の一覧より先に書く。前の watch はこの後に届いたものを当てる前に切り替わりに気づき、この watch は
   // それより前からあるものを当てないので、同じ changes.md を 2 つの watch が当てることはない)
@@ -358,17 +548,29 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
           "同じダウンロードフォルダを見る watch をほかに起動しないでください)",
       );
     }
+    if (options.input !== undefined) {
+      out("");
+      for (const line of describeWatchKeys({ build: buildAvailable })) out(line);
+      listener = listenWatchInput(options.input, onInput);
+    }
     title("待機中");
 
     const interval = options.intervalMs ?? DEFAULT_INTERVAL_MS;
     while (!stop.signal.aborted && takenBy === null) {
       try {
-        await delay(interval, undefined, { signal: stop.signal });
+        await delay(interval, undefined, { signal: tick.signal });
       } catch {
-        break; // 中断
+        if (stop.signal.aborted) break; // 中断
+        tick = new AbortController(); // 打ったコマンドで起こされた
       }
       if (handedOver()) break;
       tidyDue();
+      // 打ったコマンドは、届いた changes.md より先に行う (適用の最中に打ったものはその後に)
+      while (commands.length > 0 && !stop.signal.aborted && !handedOver()) {
+        await runCommand(commands.shift() as QueuedCommand);
+        tidyDue();
+      }
+      if (stop.signal.aborted || handedOver()) break;
       for (const f of observeWatch(state, list())) {
         // 後から始めた watch に切り替わっていたら当てない (そちらが当てる)
         if (stop.signal.aborted || handedOver()) break;
@@ -414,6 +616,7 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
           path: f.path,
           tidy: tidy ? { dir: tidyRel, afterSec: Math.ceil(tidyDelay / 1000) } : null,
           rootOption,
+          buildKey: keysEnabled && buildAvailable,
         });
         out("");
         outEmphasis(report.headline);
@@ -422,7 +625,7 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
         if (values.bell) ringBell();
         tidyDue();
         out("");
-        out("引き続き待っています (Ctrl+C で終了)");
+        out(waitingLine);
       }
     }
     if (takenBy !== null) {
@@ -432,6 +635,7 @@ export async function watchCommand(argv: string[], options: WatchOptions = {}): 
       for (const line of report.details) out(`  ${line}`);
     }
   } finally {
+    listener?.close();
     process.removeListener("SIGINT", onSigint);
     options.signal?.removeEventListener("abort", onAbort);
     if (lock !== null) releaseWatchLock(lock);
