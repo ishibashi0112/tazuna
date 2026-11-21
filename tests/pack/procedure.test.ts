@@ -351,14 +351,16 @@ suite("procedure: 描画", () => {
     assert.ok(MODE_SECTIONS.design.includes("後回し"));
   });
 
-  test("full: 調査 / 方針 / 変更 / 自己検証の 4 節", () => {
+  test("full: 目的 / 調査 / 方針 / 変更 / 自己検証の 5 節(v13 で目的を足した)", () => {
     const headings = MODE_SECTIONS.full.match(/^### .+$/gm);
     assert.deepStrictEqual(headings, [
-      "### 1. 調査",
-      "### 2. 方針",
-      "### 3. 変更",
-      "### 4. 自己検証",
+      "### 1. 目的",
+      "### 2. 調査",
+      "### 3. 方針",
+      "### 4. 変更",
+      "### 5. 自己検証",
     ]);
+    assert.ok(MODE_SECTIONS.full.includes("完了の条件"));
   });
 
   test("plan: 調査 / 方針 / 質問の 3 節で changes.md を出させない", () => {
@@ -418,7 +420,7 @@ suite("procedure: 構成の種類(layout、v7)", () => {
       "一般的な VB.NET / React のコード",
       "<ui_summary> は Designer.vb からの要約です",
       ".vbproj は編集しないでください",
-      "「どのフォームか」",
+      "どのフォーム・処理を変えるのか",
       "Option Strict が Off のプロジェクトでも、型変換は明示してください",
       "<environment> に書かれた Visual Basic と .NET Framework の版",
       "Handles 句",
@@ -458,7 +460,7 @@ suite("procedure: 構成の種類(layout、v7)", () => {
       "## パックの読み方",
       "## 回答の構成",
       "## 判断の原則",
-      "### 4. 自己検証",
+      "### 5. 自己検証",
       "新規ファイルは changes.md の create で出してください。パスは <file_summary> に示す物理パスの規則で書いてください",
       "<contract_summary> がある場合",
       "[MASKED] は伏せ字です",
@@ -563,5 +565,52 @@ suite("procedure: v10(コメント方針・<environment>・自己検証の表)",
     assert.ok(MODE_SECTIONS_BY_LAYOUT.solution.full.includes(line));
     assert.ok(MODE_SECTIONS_BY_LAYOUT.solution.implement.includes(line));
     assert.ok(!MODE_SECTIONS_BY_LAYOUT.generic.full.includes("<environment>"));
+  });
+});
+
+suite("procedure: v13(質問で止めず前提を書く・目的と完了の条件・2 回直らなければ前提を確かめる)", () => {
+  function principles(text: string): string {
+    const start = text.indexOf("\n## 判断の原則\n");
+    return text.slice(start, text.indexOf("\n## コード中のコメント\n"));
+  }
+
+  test("判断の原則: 質問で止まらず、前提を CHANGES の概要に「前提: 」の行で書く", () => {
+    for (const layout of ["solution", "generic"] as const) {
+      const text = principles(renderBuiltinProcedure("full", { layout }));
+      for (const phrase of [
+        "質問で止まらずに、最も確からしい読み方で変更を出してください",
+        "CHANGES の概要の 2 行目以降に「前提: 」で始まる行で 1 つずつ書いてください",
+        "名前の付いた定数などにまとめてください",
+        "1 つずつ推奨の答えを添えてください",
+        "3 回目の修正を重ねないでください",
+      ]) {
+        assert.ok(text.includes(phrase), `${layout}: 「${phrase}」がない`);
+      }
+      assert.ok(!text.includes("推測で埋めず、質問してください"), `${layout}: v12 の文が残っている`);
+      assert.ok(!text.includes("{{"), `${layout}: プレースホルダが残っている`);
+    }
+  });
+
+  test("質問だけで終えてよいのは 4 つの場合だけ(変える範囲は構成ごとの語句)", () => {
+    const stops = (text: string) => principles(text).match(/^  - .+$/gm);
+    const solution = stops(renderBuiltinProcedure("full"));
+    assert.strictEqual(solution?.length, 4);
+    assert.ok(solution?.[0]?.includes("どのフォーム・処理を変えるのか"));
+    const generic = stops(renderBuiltinProcedure("full", { layout: "generic" }));
+    assert.strictEqual(generic?.length, 4);
+    assert.ok(generic?.[0]?.includes("どの画面・モジュールを変えるのか"));
+    const cs = stops(renderBuiltinProcedure("full", { languages: ["cs"] }));
+    assert.deepStrictEqual(cs, solution);
+  });
+
+  test("full の方針は、質問だけで終えるときに当たらなければ前提として書いて進める", () => {
+    assert.ok(MODE_SECTIONS.full.includes("当たらなければ、確かめたいことは前提として書いて進めてください"));
+    assert.ok(!MODE_SECTIONS.full.includes("確認したいことがあれば、ここで質問し、変更を出さずに終えてください"));
+  });
+
+  test("plan の質問に推奨の答えを添えさせ、implement に完了の条件を書かせる。design は変えない", () => {
+    assert.ok(MODE_SECTIONS.plan.includes("1 つずつ推奨の答えを添えてください"));
+    assert.ok(MODE_SECTIONS.implement.includes("完了の条件(どうなれば終わりか)"));
+    assert.ok(!MODE_SECTIONS.design.includes("完了の条件"));
   });
 });

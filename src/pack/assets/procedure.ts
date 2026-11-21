@@ -83,12 +83,26 @@
  * テーブルを足す再実行のコマンドに --data を付ける(DB_SECTIONS_WITH_DATA)。チャットが「今のデータを確かめる
  * SQL を実行して貼ってください」と頼む往復を減らすため。--data なしの schema.md と DB なしの本文は v11 と
  * 同じ(版数の行だけ)
+ *
+ * v13 (2026-11-21、人を待たせない。Cursor の pstack の「人間をボトルネックにしない」から、利用者が選んだ):
+ * - 判断の原則: 分からないことがあっても質問で止まらず、最も確からしい読み方で変更を出し、置いた前提を
+ *   CHANGES の概要の 2 行目以降に「前提: 」の行で書かせる(概要はコミットの本文になるので、前提が履歴に残る)。
+ *   依頼に無い値は名前の付いた定数にまとめさせる。質問だけで終えてよいのは、変える範囲が決められない・
+ *   既存のデータを消す/書き換える・推測するとテーブルや列・複数画面の作りまで決めてしまう・呼ぶ既存の
+ *   メソッドなどが見つからない、の 4 つだけ。そのときも質問は 1 回にまとめ、1 つずつ推奨の答えを添えさせる
+ *   (「推奨どおり」と返せるように。plan の質問の節も同じ)。v12 の「推測で埋めず質問」(ASK_EXAMPLES) は削除
+ * - 同じ不具合の修正が 2 回続けて効かなかったら 3 回目を重ねず、2 回が共通に置いていた前提を書き、確かめる
+ *   手段 (一時的な記録のコード・確認用の SQL・見てもらう値) を出させる
+ * - full に「目的」の節を足す(目的・最小の変更・ユーザーが確かめられる完了の条件)。implement の方針の確認にも
+ *   完了の条件の 1 行を足す。design の節は変えていない(判断の原則は全モード共通。変更を出さない plan・design では
+ *   前提を方針や設計書に書かせる)
+ * 役割演技での v12 との比較の記録は設計書 §17 の 2026-11-21
  */
 
 import { PACK_COMMAND, TOOL_NAME } from "../../brand.ts";
 import type { ProjectLanguage } from "../projectLanguage.ts";
 
-export const PROCEDURE_VERSION = 12;
+export const PROCEDURE_VERSION = 13;
 
 /** 構成の種類(設定ファイルの kind と同じ。手順文の表現の切り替えに使う) */
 export const PROCEDURE_LAYOUTS = ["solution", "generic"] as const;
@@ -130,7 +144,13 @@ export const PROCEDURE_TEMPLATE = `<!-- ${TOOL_NAME} procedure v${PROCEDURE_VERS
 
 ## 判断の原則
 
-- 分からないことは推測で埋めず、質問してください。特に{{LAYOUT:ASK_EXAMPLES}}が読み取れないときは、変更を出さずに質問だけで回答を終えてください
+- 分からないことがあっても、質問で止まらずに、最も確からしい読み方で変更を出してください。読み方はパック内の既存の処理・文書・依頼の文面を根拠に選び、置いた前提を changes.md の CHANGES の概要の 2 行目以降に「前提: 」で始まる行で 1 つずつ書いてください(ユーザーは適用した後に前提を読んで直せます。changes.md は元に戻せます)。依頼に無い値(文言・上限・金額など)は、後で直しやすいよう名前の付いた定数などにまとめてください。回答の構成が変更を出さないとしているモード(plan・design)では、そちらに従い、置いた前提は方針や設計書に書いてください
+- 変更を出さずに質問だけで回答を終えるのは、次のどれかに当たるときだけです。質問は 1 回にまとめ、1 つずつ推奨の答えを添えてください(ユーザーが「推奨どおり」と返せるように)
+  - どの{{LAYOUT:SCOPE}}を変えるのかが、依頼とパックから決められない
+  - 読み違えると、既存のデータを消す・書き換える処理になる(データの一括更新・削除・移行)
+  - 決めるのに要る情報(テーブル・列・外部の仕様など)がパックに無く、推測すると新しいテーブルや列、複数の画面にまたがる作りまで決めてしまう
+  - 呼ぶ必要のある既存のメソッド・プロパティ・コントロール・列が、パックに見つからない
+- 同じ不具合の修正を 2 回出しても直らないと伝えられたら、3 回目の修正を重ねないでください。2 回の修正が共通に置いていた前提(「原因は〜にある」)を 1 文で書き、それが正しいかを確かめる手段を出してください(値を記録する一時的なコード、確認用の SQL、ユーザーに見てもらう具体的な値など)。修正は、確かめた結果で原因が決まってから出します。一時的なコードは、原因が決まったときの変更で消してください
 - 既存コードの流儀(命名・エラー処理・DB アクセスの書き方)に合わせてください。パック内に同種の処理があれば、それを手本にしてください。ただしコメントは次の「コード中のコメント」に従います
 {{LAYOUT:TYPE_RULE}}
 - 影響範囲は最小にしてください。求められていないリファクタリングはしないでください
@@ -146,12 +166,15 @@ export const PROCEDURE_TEMPLATE = `<!-- ${TOOL_NAME} procedure v${PROCEDURE_VERS
 
 // ---- 「回答の構成」の部品。モードごとに番号を振って組み立てる ----
 
+const GOAL_BODY = `依頼の目的を 1〜2 文で書き、それを満たす最小の変更を 1 行で述べてください。
+完了の条件(どうなれば終わりか)を、ユーザーが確かめられる形で書いてください。ビルドの成否や、実行して結果を比べられる手順のように合否がはっきり分かる形を優先し、画面で確かめるときは操作と期待する結果を具体的に書きます。`;
+
 const INVESTIGATE_BODY = `読んだファイルと、関係するシンボル(クラス・メソッド・コントロール名)を箇条書きで挙げてください。
 変更対象の処理がどこから呼ばれ、何を呼ぶかを 1〜3 行で述べてください。`;
 
 const POLICY_BODY_COMMON = `何をどう変えるかを述べてください。検討して採らなかった案があれば理由とともに 1 行で。
 リスク(既存動作への影響、未確認の前提)を挙げてください。
-変更で呼ぶ既存のメソッド・プロパティ・コントロール・列は、パック内で定義を確かめたものだけにしてください。見つからないものは推測で呼ばず、質問してください。`;
+変更で呼ぶ既存のメソッド・プロパティ・コントロール・列は、パック内で定義を確かめたものだけにしてください。見つからないものは推測で呼ばないでください(判断の原則の「質問だけで回答を終える」ときに当たります)。`;
 
 const CHANGES_BODY = `<instruction> の規約どおり changes.md を出してください。`;
 
@@ -235,7 +258,7 @@ export const LAYOUT_TEXT: Readonly<Record<ProcedureLayout, Readonly<Record<strin
       "- <ui_summary> は Designer.vb からの要約です。コントロール名・型はここから引いてください。Designer.vb 本体は変更対象にしません\n",
     READ_NEW_FILES:
       "- 新規ファイルは changes.md の create で出してください。.vbproj は編集しないでください(適用ツールが登録します)。パスは <file_summary> に示す物理パスの規則で書いてください",
-    ASK_EXAMPLES: "「どのフォームか」「既存のどの処理に合わせるか」「例外時の挙動」",
+    SCOPE: "フォーム・処理",
     TYPE_RULE:
       "- 構文と API は、<environment> に書かれた Visual Basic と .NET Framework の版で使えるものだけにしてください(新しい Visual Studio でビルドしていても、古い構文は通ります)。パック内の既存コードで使われている構文は使って構いません\n- Option Strict が Off のプロジェクトでも、型変換は明示してください",
   },
@@ -245,7 +268,7 @@ export const LAYOUT_TEXT: Readonly<Record<ProcedureLayout, Readonly<Record<strin
     READ_UI_SUMMARY: "",
     READ_NEW_FILES:
       "- 新規ファイルは changes.md の create で出してください。パスは <file_summary> に示す物理パスの規則で書いてください",
-    ASK_EXAMPLES: "「どの画面・モジュールか」「既存のどの処理に合わせるか」「例外時の挙動」",
+    SCOPE: "画面・モジュール",
     TYPE_RULE: "- 型は明示し、暗黙の型変換や any に相当する緩い型に頼らないでください",
   },
 };
@@ -266,7 +289,7 @@ export const SOLUTION_LANGUAGE_TEXT: Readonly<Record<Exclude<SolutionLanguages, 
     READ_UI_SUMMARY: `- <ui_summary> は Designer.cs からの要約です。コントロール名・型と、Designer.cs で結び付け済みのイベント(イベント名 → ハンドラー)はここから引いてください。Designer.cs 本体は変更対象にしません。${CS_EVENT_RULE}\n`,
     READ_NEW_FILES:
       "- 新規ファイルは changes.md の create で出してください。.csproj は編集しないでください(適用ツールが登録します)。パスは <file_summary> に示す物理パスの規則で書いてください",
-    ASK_EXAMPLES: LAYOUT_TEXT.solution.ASK_EXAMPLES!,
+    SCOPE: LAYOUT_TEXT.solution.SCOPE!,
     TYPE_RULE: `- 構文と API は、<environment> に書かれた C# と .NET の版で使えるものだけにしてください(新しい Visual Studio でビルドしていても、古い構文は通ります)。パック内の既存コードで使われている構文は使って構いません\n- ${CS_NULLABLE_RULE}`,
   },
   "vb+cs": {
@@ -275,7 +298,7 @@ export const SOLUTION_LANGUAGE_TEXT: Readonly<Record<Exclude<SolutionLanguages, 
     READ_UI_SUMMARY: `- <ui_summary> は Designer.vb / Designer.cs からの要約です。コントロール名・型(Designer.cs は結び付け済みのイベントも)はここから引いてください。Designer.vb / Designer.cs 本体は変更対象にしません。C# のフォームで${CS_EVENT_RULE}\n`,
     READ_NEW_FILES:
       "- 新規ファイルは changes.md の create で出してください。.vbproj / .csproj は編集しないでください(適用ツールが登録します)。パスは <file_summary> に示す物理パスの規則で書いてください",
-    ASK_EXAMPLES: LAYOUT_TEXT.solution.ASK_EXAMPLES!,
+    SCOPE: LAYOUT_TEXT.solution.SCOPE!,
     TYPE_RULE: `- 構文と API は、<environment> に書かれた各プロジェクトの言語(Visual Basic / C#)と .NET の版で使えるものだけにしてください(新しい Visual Studio でビルドしていても、古い構文は通ります)。パック内の既存コードで使われている構文は使って構いません\n- Visual Basic は Option Strict が Off のプロジェクトでも、型変換は明示してください\n- C# で${CS_NULLABLE_RULE}`,
   },
 };
@@ -314,15 +337,16 @@ function buildModeSections(
   const VERIFY_BODY = verifyBody(layout, language);
   return {
   full: [
-    section(1, "調査", INVESTIGATE_BODY),
+    section(1, "目的", GOAL_BODY),
+    section(2, "調査", INVESTIGATE_BODY),
     section(
-      2,
+      3,
       "方針",
       `${POLICY_BODY_COMMON}
-確認したいことがあれば、ここで質問し、変更を出さずに終えてください。`,
+判断の原則の「質問だけで回答を終える」ときに当たれば、ここで質問し(推奨の答えを添えて)、変更を出さずに終えてください。当たらなければ、確かめたいことは前提として書いて進めてください。`,
     ),
-    section(3, "変更", CHANGES_BODY),
-    section(4, "自己検証", VERIFY_BODY),
+    section(4, "変更", CHANGES_BODY),
+    section(5, "自己検証", VERIFY_BODY),
   ].join("\n\n"),
   plan: [
     section(1, "調査", INVESTIGATE_BODY),
@@ -335,7 +359,7 @@ function buildModeSections(
     section(
       3,
       "質問",
-      `曖昧な点・確認したい点を番号付きで挙げてください。なければ「なし」と書いてください。
+      `曖昧な点・確認したい点を番号付きで挙げ、1 つずつ推奨の答えを添えてください(ユーザーが「推奨どおり」と返せるように)。なければ「なし」と書いてください。
 このモードでは changes.md を出さないでください。`,
     ),
   ].join("\n\n"),
@@ -343,7 +367,7 @@ function buildModeSections(
     section(
       1,
       "方針の確認",
-      `<plan> の内容を 3 行以内で要約し、そのとおりに実装することを述べてください。<plan> と矛盾する事実をパック内に見つけた場合は、実装せずにその点を指摘して終えてください。`,
+      `<plan> の内容を 3 行以内で要約し、そのとおりに実装することを述べてください。完了の条件(どうなれば終わりか)を、ユーザーが確かめられる形で 1 行で書いてください。<plan> と矛盾する事実をパック内に見つけた場合は、実装せずにその点を指摘して終えてください。`,
     ),
     section(2, "変更", CHANGES_BODY),
     section(3, "自己検証", VERIFY_BODY),
